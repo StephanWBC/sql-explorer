@@ -19,6 +19,8 @@
     <PackageReference Include="Avalonia.AvaloniaEdit" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Identity.Client" />
+    <PackageReference Include="Microsoft.Identity.Client.Extensions.Msal" />
   </ItemGroup>
   <ItemGroup>
     <AvaloniaResource Include="Assets/**" />

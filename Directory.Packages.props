@@ -23,6 +23,8 @@
     <!-- SQL Server -->
     <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.0.1" />
     <PackageVersion Include="Azure.Identity" Version="1.13.2" />
+    <PackageVersion Include="Microsoft.Identity.Client" Version="4.67.2" />
+    <PackageVersion Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.67.2" />
 
     <!-- Data Protection (credential encryption) -->
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection" Version="9.0.0" />

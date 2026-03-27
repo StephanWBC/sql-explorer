@@ -1,24 +1,51 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
+using System.Net.Http.Headers;
+using System.Text.Json;
 using Azure.Core;
-using Azure.Identity;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using Microsoft.Data.SqlClient;
+using Microsoft.Identity.Client;
+using Microsoft.Identity.Client.Extensions.Msal;
 using SqlStudio.Core.Interfaces;
 using SqlStudio.Core.Models;
 
 namespace SqlStudio.App.ViewModels;
+
+public record AzureSubscription(string Id, string Name);
+
+public record AzureDatabase(
+    string SubscriptionId,
+    string SubscriptionName,
+    string ResourceGroup,
+    string ServerFqdn,
+    string DatabaseName)
+{
+    public string DisplayName => $"{DatabaseName}  —  {ServerFqdn}";
+    public string ContextLabel => ResourceGroup;
+}
 
 public partial class ConnectionDialogViewModel : ViewModelBase
 {
     private readonly IConnectionManager _connectionManager;
     private readonly IConnectionStore _connectionStore;
     private AccessToken? _entraToken;
+    private string? _armAccessToken;
+    private IPublicClientApplication? _msalApp;
+    private IAccount? _msalAccount;
+
+    private static readonly string[] SqlScopes = ["https://database.windows.net/.default"];
+    private static readonly string[] ArmScopes = ["https://management.azure.com/.default"];
+    private const string AzureCliClientId = "04b07795-8ddb-461a-bbee-02f9e1bf7b46";
+
+    private static readonly string CredDir = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".sqlexplorer");
+    private static readonly string EntraCredFile = Path.Combine(CredDir, "entra-credential.json");
 
     [ObservableProperty] private string _serverName = string.Empty;
     [ObservableProperty] private int _port = 1433;
     [ObservableProperty] private string _databaseName = "master";
-    [ObservableProperty] private ConnectionAuthType _authType = ConnectionAuthType.SqlAuthentication;
+    [ObservableProperty] private ConnectionAuthType _authType = ConnectionAuthType.EntraIdInteractive;
     [ObservableProperty] private string _username = string.Empty;
     [ObservableProperty] private string _password = string.Empty;
     [ObservableProperty] private string _tenantId = string.Empty;
@@ -36,27 +63,52 @@ public partial class ConnectionDialogViewModel : ViewModelBase
     [ObservableProperty] private bool _isEntraSignedIn;
     [ObservableProperty] private string _entraUserEmail = string.Empty;
     [ObservableProperty] private bool _isSigningIn;
-    [ObservableProperty] private string? _selectedDatabase;
+    [ObservableProperty] private AzureDatabase? _selectedDatabase;
     [ObservableProperty] private bool _isLoadingDatabases;
+    [ObservableProperty] private bool _hasSubscriptions;
+    [ObservableProperty] private AzureSubscription? _selectedSubscription;
+
+    // Subscription filter — not "All", just one per subscription
+    private readonly List<AzureDatabase> _allDatabases = new();
 
     public ObservableCollection<SavedConnection> SavedConnections { get; } = new();
-    public ObservableCollection<ConnectionAuthType> AuthTypes { get; } = new(
-        Enum.GetValues<ConnectionAuthType>());
-    public ObservableCollection<string> AvailableDatabases { get; } = new();
+    public ObservableCollection<AzureDatabase> AvailableDatabases { get; } = new();
+    public ObservableCollection<AzureSubscription> AvailableSubscriptions { get; } = new();
+    public ObservableCollection<string> AuthTypeNames { get; } = new()
+    {
+        "SQL Authentication",
+        "Entra ID Interactive",
+        "Entra ID Default"
+    };
+
+    public string AuthTypeName
+    {
+        get => AuthType switch
+        {
+            ConnectionAuthType.EntraIdInteractive => "Entra ID Interactive",
+            ConnectionAuthType.EntraIdDefault => "Entra ID Default",
+            _ => "SQL Authentication"
+        };
+        set
+        {
+            AuthType = value switch
+            {
+                "Entra ID Interactive" => ConnectionAuthType.EntraIdInteractive,
+                "Entra ID Default" => ConnectionAuthType.EntraIdDefault,
+                _ => ConnectionAuthType.SqlAuthentication
+            };
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(IsSqlAuth));
+            OnPropertyChanged(nameof(IsEntraAuth));
+        }
+    }
 
     public bool IsSqlAuth => AuthType == ConnectionAuthType.SqlAuthentication;
     public bool IsEntraAuth => AuthType != ConnectionAuthType.SqlAuthentication;
-
-    // Result
     public bool DialogResult { get; private set; }
     public ConnectionInfo? ResultConnection { get; private set; }
     public Guid? ResultConnectionId { get; private set; }
-
     public event EventHandler? CloseRequested;
-
-    private static readonly string CredDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".sqlexplorer");
-    private static readonly string EntraCredFile = Path.Combine(CredDir, "entra-credential.json");
 
     public ConnectionDialogViewModel(IConnectionManager connectionManager, IConnectionStore connectionStore)
     {
@@ -66,7 +118,37 @@ public partial class ConnectionDialogViewModel : ViewModelBase
         _ = RestoreEntraCredentialAsync();
     }
 
-    /// Restore persisted Entra credential from disk — silent token refresh, no browser popup
+    // ── MSAL with persistent token cache ──────────────────────────────
+
+    private async Task<IPublicClientApplication> GetOrCreateMsalAppAsync()
+    {
+        if (_msalApp != null) return _msalApp;
+
+        var authority = string.IsNullOrWhiteSpace(TenantId)
+            ? "https://login.microsoftonline.com/organizations"
+            : $"https://login.microsoftonline.com/{TenantId}";
+
+        _msalApp = PublicClientApplicationBuilder
+            .Create(AzureCliClientId)
+            .WithAuthority(authority)
+            .WithDefaultRedirectUri()
+            .Build();
+
+        // Persistent token cache — survives app restarts
+        Directory.CreateDirectory(CredDir);
+        var storageProps = new StorageCreationPropertiesBuilder("msal_cache.bin", CredDir)
+            .WithMacKeyChain("SqlExplorer", "MSALTokenCache")
+            .WithLinuxUnprotectedFile() // fallback for Linux
+            .Build();
+
+        var cacheHelper = await MsalCacheHelper.CreateAsync(storageProps);
+        cacheHelper.RegisterCache(_msalApp.UserTokenCache);
+
+        return _msalApp;
+    }
+
+    // ── Restore / persist ─────────────────────────────────────────────
+
     private async Task RestoreEntraCredentialAsync()
     {
         try
@@ -75,14 +157,36 @@ public partial class ConnectionDialogViewModel : ViewModelBase
             var json = await File.ReadAllTextAsync(EntraCredFile);
             var email = ExtractJsonValue(json, "email");
             var tenantId = ExtractJsonValue(json, "tenantId");
-
             if (string.IsNullOrEmpty(email)) return;
 
             EntraUserEmail = email;
             if (!string.IsNullOrEmpty(tenantId)) TenantId = tenantId;
+
+            // Try silent refresh from persistent MSAL cache
+            var app = await GetOrCreateMsalAppAsync();
+            var accounts = await app.GetAccountsAsync();
+            var account = accounts.FirstOrDefault();
+            if (account == null) return;
+
+            _msalAccount = account;
+            var armResult = await app.AcquireTokenSilent(ArmScopes, account).ExecuteAsync();
+            _armAccessToken = armResult.AccessToken;
+
+            try
+            {
+                var sqlResult = await app.AcquireTokenSilent(SqlScopes, account).ExecuteAsync();
+                _entraToken = new AccessToken(sqlResult.AccessToken, sqlResult.ExpiresOn);
+            }
+            catch { }
+
             IsEntraSignedIn = true;
+            await DiscoverSubscriptionsAsync();
         }
-        catch { /* ignore — user can sign in again */ }
+        catch
+        {
+            // Token cache expired — user needs to sign in again
+            IsEntraSignedIn = false;
+        }
     }
 
     private async Task PersistEntraCredentialAsync()
@@ -93,13 +197,36 @@ public partial class ConnectionDialogViewModel : ViewModelBase
             var json = $"{{\"email\":\"{EntraUserEmail}\",\"tenantId\":\"{TenantId}\"}}";
             await File.WriteAllTextAsync(EntraCredFile, json);
         }
-        catch { /* best effort */ }
+        catch { }
     }
+
+    // ── Auth type / selection changes ─────────────────────────────────
 
     partial void OnAuthTypeChanged(ConnectionAuthType value)
     {
         OnPropertyChanged(nameof(IsSqlAuth));
         OnPropertyChanged(nameof(IsEntraAuth));
+        OnPropertyChanged(nameof(AuthTypeName));
+    }
+
+    partial void OnSelectedDatabaseChanged(AzureDatabase? value)
+    {
+        if (value == null) return;
+        ServerName = value.ServerFqdn;
+        DatabaseName = value.DatabaseName;
+    }
+
+    partial void OnSelectedSubscriptionChanged(AzureSubscription? value)
+    {
+        // Drill down: show only databases from the selected subscription
+        AvailableDatabases.Clear();
+        if (value == null) return;
+
+        IsLoadingDatabases = true;
+        StatusMessage = $"Loading databases for {value.Name}...";
+        IsStatusError = false;
+
+        _ = LoadDatabasesForSubscriptionAsync(value);
     }
 
     partial void OnSelectedSavedConnectionChanged(SavedConnection? value)
@@ -116,12 +243,6 @@ public partial class ConnectionDialogViewModel : ViewModelBase
         ConnectionName = value.Name;
     }
 
-    partial void OnSelectedDatabaseChanged(string? value)
-    {
-        if (value != null)
-            DatabaseName = value;
-    }
-
     private async Task LoadSavedConnectionsAsync()
     {
         var connections = await _connectionStore.GetAllAsync();
@@ -130,60 +251,53 @@ public partial class ConnectionDialogViewModel : ViewModelBase
             SavedConnections.Add(conn);
     }
 
+    // ── Sign in ───────────────────────────────────────────────────────
+
     [RelayCommand]
     private async Task SignInWithEntraAsync()
     {
-        if (string.IsNullOrWhiteSpace(ServerName))
-        {
-            StatusMessage = "Please enter a server address first";
-            IsStatusError = true;
-            return;
-        }
-
         IsSigningIn = true;
         StatusMessage = "Opening browser for sign-in...";
         IsStatusError = false;
 
         try
         {
-            // Use InteractiveBrowserCredential — this opens the default browser
-            var options = new InteractiveBrowserCredentialOptions
+            var app = await GetOrCreateMsalAppAsync();
+            AuthenticationResult armResult;
+
+            try
             {
-                TokenCachePersistenceOptions = new TokenCachePersistenceOptions { Name = "SqlExplorer" }
-            };
-
-            if (!string.IsNullOrWhiteSpace(TenantId))
-                options.TenantId = TenantId;
-
-            var credential = new InteractiveBrowserCredential(options);
-            var tokenContext = new TokenRequestContext(["https://database.windows.net/.default"]);
-            _entraToken = await credential.GetTokenAsync(tokenContext);
-
-            // Decode the JWT to get the user email
-            var tokenParts = _entraToken.Value.Token.Split('.');
-            if (tokenParts.Length >= 2)
+                var accounts = await app.GetAccountsAsync();
+                armResult = await app.AcquireTokenSilent(ArmScopes, accounts.FirstOrDefault())
+                    .ExecuteAsync();
+            }
+            catch (MsalUiRequiredException)
             {
-                var payload = tokenParts[1];
-                // Pad base64 if needed
-                payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
-                var json = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(payload));
-                // Simple JSON parsing for upn/email
-                var email = ExtractJsonValue(json, "upn")
-                         ?? ExtractJsonValue(json, "email")
-                         ?? ExtractJsonValue(json, "preferred_username")
-                         ?? "Signed in";
-                EntraUserEmail = email;
+                armResult = await app.AcquireTokenInteractive(ArmScopes)
+                    .WithSystemWebViewOptions(new SystemWebViewOptions
+                    {
+                        OpenBrowserAsync = OpenBrowserInIncognito
+                    })
+                    .ExecuteAsync();
             }
 
+            _msalAccount = armResult.Account;
+            _armAccessToken = armResult.AccessToken;
+            EntraUserEmail = armResult.Account?.Username ?? "Signed in";
+
+            // Get SQL token silently (same session)
+            StatusMessage = "Acquiring database credentials...";
+            try
+            {
+                var sqlResult = await app.AcquireTokenSilent(SqlScopes, _msalAccount).ExecuteAsync();
+                _entraToken = new AccessToken(sqlResult.AccessToken, sqlResult.ExpiresOn);
+            }
+            catch { }
+
             IsEntraSignedIn = true;
-            StatusMessage = $"Signed in as {EntraUserEmail}";
             IsStatusError = false;
-
-            // Persist credentials permanently to disk
             await PersistEntraCredentialAsync();
-
-            // Now list databases the user has access to
-            await LoadAvailableDatabasesAsync();
+            await DiscoverSubscriptionsAsync();
         }
         catch (Exception ex)
         {
@@ -197,53 +311,137 @@ public partial class ConnectionDialogViewModel : ViewModelBase
         }
     }
 
-    private async Task LoadAvailableDatabasesAsync()
-    {
-        if (_entraToken == null || string.IsNullOrWhiteSpace(ServerName)) return;
+    // ── Azure discovery (2-step: subscriptions → databases) ───────────
 
-        IsLoadingDatabases = true;
+    private async Task DiscoverSubscriptionsAsync()
+    {
+        StatusMessage = "Loading subscriptions...";
+        IsStatusError = false;
+        AvailableSubscriptions.Clear();
+        _allDatabases.Clear();
         AvailableDatabases.Clear();
+        HasSubscriptions = false;
 
         try
         {
-            var builder = new SqlConnectionStringBuilder
+            if (string.IsNullOrEmpty(_armAccessToken))
             {
-                DataSource = Port == 1433 ? ServerName : $"{ServerName},{Port}",
-                InitialCatalog = "master",
-                Encrypt = Encrypt,
-                TrustServerCertificate = TrustServerCertificate,
-                ConnectTimeout = 15
-            };
-
-            await using var connection = new SqlConnection(builder.ConnectionString);
-            connection.AccessToken = _entraToken.Value.Token;
-            await connection.OpenAsync();
-
-            await using var cmd = new SqlCommand(
-                "SELECT name FROM sys.databases WHERE state_desc = 'ONLINE' ORDER BY name", connection);
-            await using var reader = await cmd.ExecuteReaderAsync();
-
-            while (await reader.ReadAsync())
-            {
-                AvailableDatabases.Add(reader.GetString(0));
+                StatusMessage = "Sign in to discover your subscriptions.";
+                return;
             }
 
-            if (AvailableDatabases.Count > 0)
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            http.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", _armAccessToken);
+
+            var subsJson = await http.GetStringAsync(
+                "https://management.azure.com/subscriptions?api-version=2022-12-01");
+
+            using var doc = JsonDocument.Parse(subsJson);
+            if (doc.RootElement.TryGetProperty("value", out var arr))
             {
-                StatusMessage = $"Found {AvailableDatabases.Count} database(s). Select one to connect.";
-                // Auto-select first non-system database or master
-                SelectedDatabase = AvailableDatabases.FirstOrDefault(d =>
-                    d != "master" && d != "tempdb" && d != "model" && d != "msdb")
-                    ?? AvailableDatabases.First();
+                foreach (var sub in arr.EnumerateArray())
+                {
+                    var id = sub.TryGetProperty("subscriptionId", out var idEl) ? idEl.GetString() ?? "" : "";
+                    var name = sub.TryGetProperty("displayName", out var nameEl) ? nameEl.GetString() ?? id : id;
+                    if (!string.IsNullOrEmpty(id))
+                        AvailableSubscriptions.Add(new AzureSubscription(id, name));
+                }
+            }
+
+            HasSubscriptions = AvailableSubscriptions.Count > 0;
+
+            if (HasSubscriptions)
+            {
+                StatusMessage = $"Found {AvailableSubscriptions.Count} subscription(s). Select one to see databases.";
+                // Auto-select first subscription
+                SelectedSubscription = AvailableSubscriptions.First();
             }
             else
             {
-                StatusMessage = "No databases found. You may not have access.";
+                StatusMessage = "No Azure subscriptions found for this account.";
             }
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Could not list databases: {ex.Message}";
+            StatusMessage = $"Could not load subscriptions: {ex.Message}";
+            IsStatusError = true;
+        }
+    }
+
+    private async Task LoadDatabasesForSubscriptionAsync(AzureSubscription subscription)
+    {
+        AvailableDatabases.Clear();
+
+        try
+        {
+            if (string.IsNullOrEmpty(_armAccessToken)) return;
+
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            http.DefaultRequestHeaders.Authorization =
+                new AuthenticationHeaderValue("Bearer", _armAccessToken);
+
+            // List SQL servers in this subscription
+            var serversJson = await http.GetStringAsync(
+                $"https://management.azure.com/subscriptions/{subscription.Id}/providers/Microsoft.Sql/servers?api-version=2021-11-01");
+
+            using var serversDoc = JsonDocument.Parse(serversJson);
+            if (!serversDoc.RootElement.TryGetProperty("value", out var serversArr))
+            {
+                StatusMessage = "No SQL servers found in this subscription.";
+                IsLoadingDatabases = false;
+                return;
+            }
+
+            foreach (var server in serversArr.EnumerateArray())
+            {
+                var serverId = server.TryGetProperty("id", out var idEl) ? idEl.GetString() ?? "" : "";
+                var fqdn = "";
+                if (server.TryGetProperty("properties", out var props) &&
+                    props.TryGetProperty("fullyQualifiedDomainName", out var fqdnEl))
+                    fqdn = fqdnEl.GetString() ?? "";
+
+                if (string.IsNullOrEmpty(fqdn) || string.IsNullOrEmpty(serverId)) continue;
+
+                var parts = serverId.Split('/', StringSplitOptions.RemoveEmptyEntries);
+                var rgIdx = Array.FindIndex(parts, p => p.Equals("resourceGroups", StringComparison.OrdinalIgnoreCase));
+                var srvIdx = Array.FindIndex(parts, p => p.Equals("servers", StringComparison.OrdinalIgnoreCase));
+                if (rgIdx < 0 || srvIdx < 0) continue;
+                var rg = parts[rgIdx + 1];
+                var srvName = parts[srvIdx + 1];
+
+                StatusMessage = $"Scanning {fqdn}...";
+
+                try
+                {
+                    var dbsJson = await http.GetStringAsync(
+                        $"https://management.azure.com/subscriptions/{subscription.Id}/resourceGroups/{rg}/providers/Microsoft.Sql/servers/{srvName}/databases?api-version=2021-11-01");
+                    using var dbsDoc = JsonDocument.Parse(dbsJson);
+                    if (!dbsDoc.RootElement.TryGetProperty("value", out var dbsArr)) continue;
+
+                    foreach (var db in dbsArr.EnumerateArray())
+                    {
+                        var dbName = db.TryGetProperty("name", out var nameEl) ? nameEl.GetString() ?? "" : "";
+                        if (string.IsNullOrEmpty(dbName) || dbName == "master") continue;
+                        AvailableDatabases.Add(new AzureDatabase(subscription.Id, subscription.Name, rg, fqdn, dbName));
+                    }
+                }
+                catch { }
+            }
+
+            if (AvailableDatabases.Count > 0)
+            {
+                StatusMessage = $"Found {AvailableDatabases.Count} database(s) in {subscription.Name}.";
+                SelectedDatabase = AvailableDatabases.FirstOrDefault();
+            }
+            else
+            {
+                StatusMessage = $"No SQL databases found in {subscription.Name}.";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Error: {ex.Message}";
             IsStatusError = true;
         }
         finally
@@ -255,8 +453,83 @@ public partial class ConnectionDialogViewModel : ViewModelBase
     [RelayCommand]
     private async Task RefreshDatabasesAsync()
     {
-        await LoadAvailableDatabasesAsync();
+        if (SelectedSubscription != null)
+        {
+            IsLoadingDatabases = true;
+            await LoadDatabasesForSubscriptionAsync(SelectedSubscription);
+        }
+        else
+        {
+            await DiscoverSubscriptionsAsync();
+        }
     }
+
+    // ── Incognito browser launcher ────────────────────────────────────
+
+    private static Task OpenBrowserInIncognito(Uri uri)
+    {
+        var url = uri.AbsoluteUri;
+
+        if (OperatingSystem.IsMacOS())
+        {
+            string[] chromiumApps =
+            [
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Arc.app/Contents/MacOS/Arc",
+                "/Applications/Chromium.app/Contents/MacOS/Chromium",
+                "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+            ];
+            foreach (var path in chromiumApps)
+            {
+                if (!File.Exists(path)) continue;
+                Process.Start(new ProcessStartInfo { FileName = path, Arguments = $"--incognito \"{url}\"", UseShellExecute = false });
+                return Task.CompletedTask;
+            }
+            const string firefox = "/Applications/Firefox.app/Contents/MacOS/firefox";
+            if (File.Exists(firefox))
+            {
+                Process.Start(new ProcessStartInfo { FileName = firefox, Arguments = $"--private-window \"{url}\"", UseShellExecute = false });
+                return Task.CompletedTask;
+            }
+            Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+        }
+        else if (OperatingSystem.IsWindows())
+        {
+            var chrome = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                @"Google\Chrome\Application\chrome.exe");
+            if (File.Exists(chrome))
+            {
+                Process.Start(new ProcessStartInfo { FileName = chrome, Arguments = $"--incognito \"{url}\"", UseShellExecute = false });
+                return Task.CompletedTask;
+            }
+            var edge = @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
+            if (File.Exists(edge))
+            {
+                Process.Start(new ProcessStartInfo { FileName = edge, Arguments = $"--inprivate \"{url}\"", UseShellExecute = false });
+                return Task.CompletedTask;
+            }
+            Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private static string? ExtractEmailFromToken(string token)
+    {
+        var parts = token.Split('.');
+        if (parts.Length < 2) return null;
+        var payload = parts[1].PadRight(parts[1].Length + (4 - parts[1].Length % 4) % 4, '=');
+        try
+        {
+            var json = System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(payload));
+            return ExtractJsonValue(json, "upn")
+                ?? ExtractJsonValue(json, "email")
+                ?? ExtractJsonValue(json, "preferred_username");
+        }
+        catch { return null; }
+    }
+
+    // ── Connect / Test / Cancel ───────────────────────────────────────
 
     [RelayCommand]
     private async Task TestConnectionAsync()
@@ -264,7 +537,6 @@ public partial class ConnectionDialogViewModel : ViewModelBase
         IsTesting = true;
         StatusMessage = "Testing connection...";
         IsStatusError = false;
-
         try
         {
             var info = BuildConnectionInfo();
@@ -277,10 +549,7 @@ public partial class ConnectionDialogViewModel : ViewModelBase
             StatusMessage = $"Error: {ex.Message}";
             IsStatusError = true;
         }
-        finally
-        {
-            IsTesting = false;
-        }
+        finally { IsTesting = false; }
     }
 
     [RelayCommand]
@@ -289,9 +558,16 @@ public partial class ConnectionDialogViewModel : ViewModelBase
         IsConnecting = true;
         StatusMessage = "Connecting...";
         IsStatusError = false;
-
         try
         {
+            // Ensure we have a SQL token
+            if (_entraToken == null && _msalAccount != null)
+            {
+                var app = await GetOrCreateMsalAppAsync();
+                var sqlResult = await app.AcquireTokenSilent(SqlScopes, _msalAccount).ExecuteAsync();
+                _entraToken = new AccessToken(sqlResult.AccessToken, sqlResult.ExpiresOn);
+            }
+
             var info = BuildConnectionInfo();
             var connectionId = await _connectionManager.ConnectAsync(info);
 
@@ -301,7 +577,7 @@ public partial class ConnectionDialogViewModel : ViewModelBase
                 {
                     Id = info.Id,
                     Name = string.IsNullOrWhiteSpace(ConnectionName)
-                        ? (IsEntraSignedIn ? $"{ServerName} ({EntraUserEmail})" : ServerName)
+                        ? (IsEntraSignedIn ? $"{DatabaseName} ({EntraUserEmail})" : ServerName)
                         : ConnectionName,
                     Server = ServerName,
                     Port = Port,
@@ -325,10 +601,7 @@ public partial class ConnectionDialogViewModel : ViewModelBase
             StatusMessage = $"Error: {ex.Message}";
             IsStatusError = true;
         }
-        finally
-        {
-            IsConnecting = false;
-        }
+        finally { IsConnecting = false; }
     }
 
     [RelayCommand]
@@ -350,7 +623,7 @@ public partial class ConnectionDialogViewModel : ViewModelBase
     private ConnectionInfo BuildConnectionInfo() => new()
     {
         Name = string.IsNullOrWhiteSpace(ConnectionName)
-            ? (IsEntraSignedIn ? $"{ServerName} ({EntraUserEmail})" : ServerName)
+            ? (IsEntraSignedIn ? $"{DatabaseName} ({EntraUserEmail})" : ServerName)
             : ConnectionName,
         Server = ServerName,
         Port = Port,
