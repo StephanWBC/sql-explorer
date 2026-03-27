@@ -2,6 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## MANDATORY: Commit and Push After Every Change
+
+**Every change you make MUST be committed and pushed to main immediately.** This is not optional.
+
+After completing any code change:
+1. `dotnet build SqlStudio.slnx` — verify it compiles
+2. `git add -A && git commit -m "<descriptive message>"` — commit
+3. `git push origin main` — push (this auto-triggers build + release pipeline)
+
+The CI/CD pipeline automatically creates a new versioned release (v1.0.N) with downloadable macOS DMG and Windows ZIP installers on every push to main. There is no manual tagging step. Every push = new release.
+
 ## Build & Run Commands
 
 ```bash
@@ -17,15 +28,11 @@ dotnet test
 # Run a single test project
 dotnet test tests/SqlStudio.Core.Tests
 
-# Build macOS .dmg installer (version arg required)
+# Build macOS .dmg installer locally (version arg required)
 bash build/build-mac.sh 1.0.0
 
-# Build Windows portable zip
+# Build Windows portable zip locally
 bash build/build-windows.sh 1.0.0
-
-# Publish self-contained for specific platform
-dotnet publish src/SqlStudio.App -c Release -r osx-arm64 --self-contained
-dotnet publish src/SqlStudio.App -c Release -r win-x64 --self-contained -p:PublishSingleFile=true
 ```
 
 ## Architecture
@@ -93,12 +100,13 @@ Entra ID flow in `ConnectionDialogViewModel`:
 
 ## CI/CD
 
-GitHub Actions (`.github/workflows/release.yml`) triggers on:
-- **Every push to main** — builds macOS DMG + Windows ZIP as downloadable artifacts
-- **Tags matching `v*`** — builds + creates a GitHub Release with versioned installers attached
-- The macOS build includes ad-hoc code signing (`codesign --force --deep --sign -`) to avoid Gatekeeper "damaged app" errors
-- Windows MSI requires WiX Toolset (only works on Windows runners); ZIP is always created as fallback
-- To create a release: `git tag v1.1.0 && git push origin v1.1.0`
+GitHub Actions (`.github/workflows/release.yml`):
+- **Every push to main** automatically: builds macOS DMG + Windows ZIP, auto-tags as `v1.0.<commit-count>`, creates a GitHub Release with downloadable installers
+- No manual tagging required — the pipeline is fully automated
+- Version is deterministic: `1.0.<total-commit-count-on-main>`
+- macOS build includes ad-hoc code signing to avoid Gatekeeper errors
+- Windows MSI uses WiX Toolset (continues on error); ZIP is always created as fallback
+- DMG uses consistent app bundle name (`SQL Explorer.app`) so dragging to Applications always replaces the previous version
 
 ## Logo & Icons
 
