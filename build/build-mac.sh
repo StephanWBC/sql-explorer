@@ -85,16 +85,19 @@ if [ -f "$ROOT_DIR/src/SqlStudio.App/Assets/logo.png" ]; then
     ICONSET="$PUBLISH_DIR/AppIcon.iconset"
     mkdir -p "$ICONSET"
 
-    sips -z 16 16     "$ROOT_DIR/src/SqlStudio.App/Assets/logo.png" --out "$ICONSET/icon_16x16.png" 2>/dev/null
-    sips -z 32 32     "$ROOT_DIR/src/SqlStudio.App/Assets/logo.png" --out "$ICONSET/icon_16x16@2x.png" 2>/dev/null
-    sips -z 32 32     "$ROOT_DIR/src/SqlStudio.App/Assets/logo.png" --out "$ICONSET/icon_32x32.png" 2>/dev/null
-    sips -z 64 64     "$ROOT_DIR/src/SqlStudio.App/Assets/logo.png" --out "$ICONSET/icon_32x32@2x.png" 2>/dev/null
-    sips -z 128 128   "$ROOT_DIR/src/SqlStudio.App/Assets/logo.png" --out "$ICONSET/icon_128x128.png" 2>/dev/null
-    sips -z 256 256   "$ROOT_DIR/src/SqlStudio.App/Assets/logo.png" --out "$ICONSET/icon_128x128@2x.png" 2>/dev/null
-    sips -z 256 256   "$ROOT_DIR/src/SqlStudio.App/Assets/logo.png" --out "$ICONSET/icon_256x256.png" 2>/dev/null
-    sips -z 512 512   "$ROOT_DIR/src/SqlStudio.App/Assets/logo.png" --out "$ICONSET/icon_256x256@2x.png" 2>/dev/null
-    sips -z 512 512   "$ROOT_DIR/src/SqlStudio.App/Assets/logo.png" --out "$ICONSET/icon_512x512.png" 2>/dev/null
-    cp "$ROOT_DIR/src/SqlStudio.App/Assets/logo.png" "$ICONSET/icon_512x512@2x.png"
+    ASSETS="$ROOT_DIR/src/SqlStudio.App/Assets"
+    # Use pre-rendered sizes if available, otherwise resize from logo.png
+    for size_pair in "16:icon_16x16" "32:icon_16x16@2x" "32:icon_32x32" "64:icon_32x32@2x" \
+                     "128:icon_128x128" "256:icon_128x128@2x" "256:icon_256x256" "512:icon_256x256@2x" \
+                     "512:icon_512x512" "1024:icon_512x512@2x"; do
+        SIZE="${size_pair%%:*}"
+        NAME="${size_pair##*:}"
+        if [ -f "$ASSETS/logo-${SIZE}.png" ]; then
+            cp "$ASSETS/logo-${SIZE}.png" "$ICONSET/${NAME}.png"
+        else
+            sips -z "$SIZE" "$SIZE" "$ASSETS/logo.png" --out "$ICONSET/${NAME}.png" 2>/dev/null
+        fi
+    done
 
     iconutil -c icns "$ICONSET" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
     rm -rf "$ICONSET"
@@ -102,6 +105,18 @@ fi
 
 # Make executable
 chmod +x "$APP_BUNDLE/Contents/MacOS/SqlStudio.App"
+
+echo "Ad-hoc code signing the app bundle..."
+# Ad-hoc sign all native libraries and the main executable
+# This prevents macOS Gatekeeper "damaged" errors
+find "$APP_BUNDLE" -name "*.dylib" -exec codesign --force --sign - {} \; 2>/dev/null || true
+find "$APP_BUNDLE" -name "*.so" -exec codesign --force --sign - {} \; 2>/dev/null || true
+codesign --force --deep --sign - "$APP_BUNDLE/Contents/MacOS/SqlStudio.App" 2>/dev/null || true
+codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
+echo "Code signing complete."
+
+# Remove any quarantine attributes
+xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 
 echo "Creating .dmg installer..."
 
@@ -112,6 +127,9 @@ cp -R "$APP_BUNDLE" "$DMG_STAGING/"
 
 # Create a symlink to /Applications for drag-and-drop install
 ln -s /Applications "$DMG_STAGING/Applications"
+
+# Remove quarantine from staging too
+xattr -cr "$DMG_STAGING" 2>/dev/null || true
 
 # Create the DMG
 hdiutil create -volname "$APP_NAME" \
