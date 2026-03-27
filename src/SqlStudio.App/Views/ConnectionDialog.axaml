@@ -4,126 +4,377 @@
         x:Class="SqlStudio.App.Views.ConnectionDialog"
         x:DataType="vm:ConnectionDialogViewModel"
         Title="Connect to Server"
-        Width="550" Height="620"
+        Width="620" Height="700"
         WindowStartupLocation="CenterOwner"
         CanResize="False"
-        ShowInTaskbar="False">
+        ShowInTaskbar="False"
+        ExtendClientAreaToDecorationsHint="True"
+        ExtendClientAreaChromeHints="PreferSystemChrome"
+        TransparencyLevelHint="AcrylicBlur"
+        Background="Transparent">
 
-    <Grid RowDefinitions="Auto,*,Auto" Margin="16">
+    <Window.Styles>
+        <!-- Card style -->
+        <Style Selector="Border.card">
+            <Setter Property="Background" Value="#1A1A2E"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Padding" Value="16"/>
+            <Setter Property="BorderBrush" Value="#2A2A4A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+        </Style>
+        <Style Selector="Border.card-hover">
+            <Setter Property="Background" Value="#1A1A2E"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Padding" Value="16"/>
+            <Setter Property="BorderBrush" Value="#2A2A4A"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Transitions">
+                <Transitions>
+                    <BrushTransition Property="BorderBrush" Duration="0:0:0.2"/>
+                    <BrushTransition Property="Background" Duration="0:0:0.2"/>
+                </Transitions>
+            </Setter>
+        </Style>
+        <Style Selector="Border.card-hover:pointerover">
+            <Setter Property="BorderBrush" Value="#0078D4"/>
+            <Setter Property="Background" Value="#1E1E38"/>
+        </Style>
 
-        <!-- Saved Connections -->
-        <Border Grid.Row="0" Margin="0,0,0,12">
-            <StackPanel Spacing="6">
-                <TextBlock Text="Saved Connections" FontWeight="SemiBold" FontSize="14" />
-                <Grid ColumnDefinitions="*,Auto">
-                    <ComboBox Grid.Column="0"
-                              ItemsSource="{Binding SavedConnections}"
-                              SelectedItem="{Binding SelectedSavedConnection}"
-                              PlaceholderText="Select a saved connection..."
-                              HorizontalAlignment="Stretch">
-                        <ComboBox.ItemTemplate>
-                            <DataTemplate>
-                                <TextBlock Text="{Binding Name}" />
-                            </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                    </ComboBox>
-                    <Button Grid.Column="1" Content="Delete" Margin="8,0,0,0"
-                            Command="{Binding DeleteSavedConnectionCommand}"
-                            IsEnabled="{Binding SelectedSavedConnection, Converter={x:Static ObjectConverters.IsNotNull}}" />
-                </Grid>
-            </StackPanel>
+        <!-- Input field styling -->
+        <Style Selector="TextBox">
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="12,10"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+        <Style Selector="ComboBox">
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+        <Style Selector="NumericUpDown">
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="FontSize" Value="13"/>
+        </Style>
+
+        <!-- Label styling -->
+        <Style Selector="TextBlock.field-label">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="#8888AA"/>
+            <Setter Property="Margin" Value="2,0,0,0"/>
+        </Style>
+
+        <!-- Section header -->
+        <Style Selector="TextBlock.section-header">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#0098FF"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+        </Style>
+
+        <!-- Accent button override -->
+        <Style Selector="Button.connect-btn">
+            <Setter Property="Background" Value="#0078D4"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="24,10"/>
+        </Style>
+        <Style Selector="Button.connect-btn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#1088E4"/>
+        </Style>
+        <Style Selector="Button.secondary-btn">
+            <Setter Property="Background" Value="#2A2A4A"/>
+            <Setter Property="Foreground" Value="#CCCCDD"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="20,10"/>
+        </Style>
+        <Style Selector="Button.secondary-btn:pointerover /template/ ContentPresenter">
+            <Setter Property="Background" Value="#3A3A5A"/>
+        </Style>
+        <Style Selector="Button.danger-btn">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#FF6666"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="FontSize" Value="12"/>
+        </Style>
+    </Window.Styles>
+
+    <Panel>
+        <!-- Background gradient -->
+        <Border CornerRadius="8">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+                    <GradientStop Offset="0" Color="#0D1117"/>
+                    <GradientStop Offset="1" Color="#161B22"/>
+                </LinearGradientBrush>
+            </Border.Background>
         </Border>
 
-        <!-- Connection Form -->
-        <ScrollViewer Grid.Row="1">
-            <StackPanel Spacing="10">
-                <TextBlock Text="Connection Details" FontWeight="SemiBold" FontSize="14" />
+        <Grid RowDefinitions="Auto,*,Auto" Margin="24,40,24,24">
 
-                <!-- Connection Name -->
-                <StackPanel Spacing="4">
-                    <TextBlock Text="Connection Name" FontSize="12" />
-                    <TextBox Text="{Binding ConnectionName}" Watermark="My Server (optional)" />
-                </StackPanel>
-
-                <!-- Server -->
-                <StackPanel Spacing="4">
-                    <TextBlock Text="Server" FontSize="12" />
-                    <TextBox Text="{Binding ServerName}" Watermark="server.database.windows.net or localhost" />
-                </StackPanel>
-
-                <!-- Port -->
-                <StackPanel Spacing="4">
-                    <TextBlock Text="Port" FontSize="12" />
-                    <NumericUpDown Value="{Binding Port}" Minimum="1" Maximum="65535"
-                                   FormatString="0" />
-                </StackPanel>
-
-                <!-- Database -->
-                <StackPanel Spacing="4">
-                    <TextBlock Text="Database" FontSize="12" />
-                    <TextBox Text="{Binding DatabaseName}" Watermark="master" />
-                </StackPanel>
-
-                <!-- Authentication Type -->
-                <StackPanel Spacing="4">
-                    <TextBlock Text="Authentication" FontSize="12" />
-                    <ComboBox ItemsSource="{Binding AuthTypes}"
-                              SelectedItem="{Binding AuthType}"
-                              HorizontalAlignment="Stretch">
-                        <ComboBox.ItemTemplate>
-                            <DataTemplate>
-                                <TextBlock Text="{Binding}" />
-                            </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                    </ComboBox>
-                </StackPanel>
-
-                <!-- SQL Auth Fields -->
-                <StackPanel Spacing="4" IsVisible="{Binding IsSqlAuth}">
-                    <TextBlock Text="Username" FontSize="12" />
-                    <TextBox Text="{Binding Username}" Watermark="sa" />
-                </StackPanel>
-                <StackPanel Spacing="4" IsVisible="{Binding IsSqlAuth}">
-                    <TextBlock Text="Password" FontSize="12" />
-                    <TextBox Text="{Binding Password}" PasswordChar="*" Watermark="Password" />
-                </StackPanel>
-
-                <!-- Entra Auth Fields -->
-                <StackPanel Spacing="4" IsVisible="{Binding IsEntraAuth}">
-                    <TextBlock Text="Tenant ID (optional)" FontSize="12" />
-                    <TextBox Text="{Binding TenantId}" Watermark="Azure AD Tenant ID" />
-                </StackPanel>
-
-                <!-- Options -->
-                <StackPanel Spacing="6" Margin="0,8,0,0">
-                    <CheckBox IsChecked="{Binding TrustServerCertificate}" Content="Trust Server Certificate" />
-                    <CheckBox IsChecked="{Binding Encrypt}" Content="Encrypt Connection" />
-                    <CheckBox IsChecked="{Binding SaveConnection}" Content="Save this connection" />
+            <!-- Header with logo -->
+            <StackPanel Grid.Row="0" Spacing="4" Margin="0,0,0,20">
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <Viewbox Width="36" Height="36">
+                        <Canvas Width="64" Height="64">
+                            <Ellipse Canvas.Left="8" Canvas.Top="8" Width="48" Height="16" Fill="#0078D4" />
+                            <Rectangle Canvas.Left="8" Canvas.Top="16" Width="48" Height="32" Fill="#0078D4" />
+                            <Ellipse Canvas.Left="8" Canvas.Top="40" Width="48" Height="16" Fill="#005A9E" />
+                            <Ellipse Canvas.Left="12" Canvas.Top="10" Width="40" Height="12" Fill="#2B88D8" />
+                            <Ellipse Canvas.Left="36" Canvas.Top="34" Width="18" Height="18" Stroke="White" StrokeThickness="2.5" Fill="Transparent" />
+                            <Line StartPoint="51,49" EndPoint="58,56" Stroke="White" StrokeThickness="2.5" StrokeLineCap="Round" />
+                        </Canvas>
+                    </Viewbox>
+                    <StackPanel VerticalAlignment="Center">
+                        <TextBlock Text="Connect to Server" FontSize="20" FontWeight="Bold" Foreground="White"/>
+                        <TextBlock Text="Azure SQL, local instances, or Docker" FontSize="12" Foreground="#6688AA"/>
+                    </StackPanel>
                 </StackPanel>
             </StackPanel>
-        </ScrollViewer>
 
-        <!-- Buttons and Status -->
-        <StackPanel Grid.Row="2" Spacing="8" Margin="0,12,0,0">
-            <!-- Status -->
-            <TextBlock Text="{Binding StatusMessage}" FontSize="12"
-                       IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
-                       Foreground="{Binding IsStatusError, Converter={x:Static vm:BoolToErrorColorConverter.Instance}}" />
+            <!-- Main content -->
+            <ScrollViewer Grid.Row="1" Padding="0,0,8,0">
+                <StackPanel Spacing="14">
 
-            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
-                <Button Content="Test Connection"
-                        Command="{Binding TestConnectionCommand}"
-                        IsEnabled="{Binding !IsTesting}"
-                        Padding="16,8" />
-                <Button Content="Connect"
-                        Command="{Binding ConnectCommand}"
-                        IsEnabled="{Binding !IsConnecting}"
-                        Classes="accent"
-                        Padding="16,8" />
-                <Button Content="Cancel"
-                        Command="{Binding CancelCommand}"
-                        Padding="16,8" />
+                    <!-- Saved Connections Card -->
+                    <Border Classes="card-hover">
+                        <StackPanel Spacing="8">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <TextBlock Text="&#x2605;" Foreground="#FFD700" FontSize="14" VerticalAlignment="Center"/>
+                                <TextBlock Text="Saved Connections" Classes="section-header"/>
+                            </StackPanel>
+                            <Grid ColumnDefinitions="*,Auto" Margin="0,2,0,0">
+                                <ComboBox Grid.Column="0"
+                                          ItemsSource="{Binding SavedConnections}"
+                                          SelectedItem="{Binding SelectedSavedConnection}"
+                                          PlaceholderText="Choose a saved connection..."
+                                          HorizontalAlignment="Stretch">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <TextBlock Text="&#x1F5A5;" FontSize="13" VerticalAlignment="Center"/>
+                                                <TextBlock Text="{Binding Name}" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Button Grid.Column="1" Content="&#x1F5D1; Remove" Margin="8,0,0,0"
+                                        Classes="danger-btn"
+                                        Command="{Binding DeleteSavedConnectionCommand}"
+                                        IsEnabled="{Binding SelectedSavedConnection, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Server Details Card -->
+                    <Border Classes="card">
+                        <StackPanel Spacing="10">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <TextBlock Text="&#x1F5A5;" Foreground="#00B4D8" FontSize="14" VerticalAlignment="Center"/>
+                                <TextBlock Text="Server Details" Classes="section-header"/>
+                            </StackPanel>
+
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="CONNECTION NAME" Classes="field-label"/>
+                                <TextBox Text="{Binding ConnectionName}" Watermark="e.g. Production DB, Dev Server..." />
+                            </StackPanel>
+
+                            <Grid ColumnDefinitions="*,120" Margin="0,2,0,0">
+                                <StackPanel Grid.Column="0" Spacing="4" Margin="0,0,10,0">
+                                    <TextBlock Text="SERVER ADDRESS" Classes="field-label"/>
+                                    <TextBox Text="{Binding ServerName}" Watermark="myserver.database.windows.net" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Spacing="4">
+                                    <TextBlock Text="PORT" Classes="field-label"/>
+                                    <NumericUpDown Value="{Binding Port}" Minimum="1" Maximum="65535" FormatString="0" />
+                                </StackPanel>
+                            </Grid>
+
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="DATABASE" Classes="field-label"/>
+                                <TextBox Text="{Binding DatabaseName}" Watermark="master" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Authentication Card -->
+                    <Border Classes="card">
+                        <StackPanel Spacing="10">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <TextBlock Text="&#x1F512;" Foreground="#FFD700" FontSize="14" VerticalAlignment="Center"/>
+                                <TextBlock Text="Authentication" Classes="section-header"/>
+                            </StackPanel>
+
+                            <StackPanel Spacing="4">
+                                <TextBlock Text="METHOD" Classes="field-label"/>
+                                <ComboBox ItemsSource="{Binding AuthTypes}"
+                                          SelectedItem="{Binding AuthType}"
+                                          HorizontalAlignment="Stretch">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <TextBlock Text="{Binding}" VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                            </StackPanel>
+
+                            <!-- SQL Auth Fields -->
+                            <Grid ColumnDefinitions="*,*" IsVisible="{Binding IsSqlAuth}">
+                                <StackPanel Grid.Column="0" Spacing="4" Margin="0,0,6,0">
+                                    <TextBlock Text="USERNAME" Classes="field-label"/>
+                                    <TextBox Text="{Binding Username}" Watermark="sa" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Spacing="4" Margin="6,0,0,0">
+                                    <TextBlock Text="PASSWORD" Classes="field-label"/>
+                                    <TextBox Text="{Binding Password}" PasswordChar="&#x2022;" Watermark="&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;&#x2022;" />
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- Entra ID: Not signed in yet -->
+                            <StackPanel IsVisible="{Binding IsEntraAuth}" Spacing="8">
+
+                                <!-- Optional tenant ID -->
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="TENANT ID (optional — leave blank for default)" Classes="field-label"/>
+                                    <TextBox Text="{Binding TenantId}" Watermark="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" />
+                                </StackPanel>
+
+                                <!-- Sign In button (when not signed in) -->
+                                <Border IsVisible="{Binding !IsEntraSignedIn}"
+                                        Background="#0D2137" CornerRadius="10" Padding="16,14"
+                                        BorderBrush="#1A3A5C" BorderThickness="1">
+                                    <StackPanel Spacing="10" HorizontalAlignment="Center">
+                                        <TextBlock Text="Sign in with your Microsoft account to see your databases"
+                                                   FontSize="12" Foreground="#6688AA" HorizontalAlignment="Center" TextWrapping="Wrap"/>
+                                        <Button Command="{Binding SignInWithEntraCommand}"
+                                                IsEnabled="{Binding !IsSigningIn}"
+                                                HorizontalAlignment="Center"
+                                                Classes="connect-btn" Padding="28,10">
+                                            <StackPanel Orientation="Horizontal" Spacing="8">
+                                                <TextBlock Text="&#x1F310;" FontSize="15" VerticalAlignment="Center"/>
+                                                <TextBlock Text="{Binding IsSigningIn, Converter={x:Static vm:BoolToSignInTextConverter.Instance}}"
+                                                           VerticalAlignment="Center" FontSize="14"/>
+                                            </StackPanel>
+                                        </Button>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Signed in state -->
+                                <Border IsVisible="{Binding IsEntraSignedIn}"
+                                        Background="#0A2A10" CornerRadius="10" Padding="14,12"
+                                        BorderBrush="#1A5C2A" BorderThickness="1">
+                                    <StackPanel Spacing="4">
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <TextBlock Text="&#x2705;" FontSize="16" VerticalAlignment="Center"/>
+                                            <TextBlock Text="Signed in as" FontSize="12" Foreground="#6AAA6A" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{Binding EntraUserEmail}" FontSize="13" Foreground="#88DD88"
+                                                       FontWeight="SemiBold" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Database Selection Card (visible after Entra sign-in) -->
+                    <Border Classes="card" IsVisible="{Binding IsEntraSignedIn}">
+                        <StackPanel Spacing="10">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <TextBlock Text="&#x1F4BE;" Foreground="#00B4D8" FontSize="14" VerticalAlignment="Center"/>
+                                <TextBlock Text="Select Database" Classes="section-header"/>
+                                <Button Command="{Binding RefreshDatabasesCommand}" Classes="danger-btn"
+                                        Content="&#x1F504; Refresh" Margin="8,0,0,0" Foreground="#6688AA"/>
+                            </StackPanel>
+
+                            <ProgressBar IsIndeterminate="True" IsVisible="{Binding IsLoadingDatabases}"
+                                         Height="3" Margin="0,0,0,4"/>
+
+                            <ListBox ItemsSource="{Binding AvailableDatabases}"
+                                     SelectedItem="{Binding SelectedDatabase}"
+                                     MaxHeight="180"
+                                     Background="Transparent"
+                                     BorderThickness="0">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Orientation="Horizontal" Spacing="8" Margin="4,2">
+                                            <TextBlock Text="&#x1F4BE;" FontSize="13" VerticalAlignment="Center" Opacity="0.6"/>
+                                            <TextBlock Text="{Binding}" FontSize="13" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+
+                            <TextBlock IsVisible="{Binding !IsLoadingDatabases}"
+                                       Text="{Binding AvailableDatabases.Count, StringFormat='({0} databases available)'}"
+                                       FontSize="11" Foreground="#6688AA"/>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Options Card -->
+                    <Border Classes="card">
+                        <StackPanel Spacing="8">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <TextBlock Text="&#x2699;" Foreground="#AAAACC" FontSize="14" VerticalAlignment="Center"/>
+                                <TextBlock Text="Options" Classes="section-header"/>
+                            </StackPanel>
+                            <WrapPanel Orientation="Horizontal">
+                                <CheckBox IsChecked="{Binding TrustServerCertificate}" Content="Trust Server Certificate" Margin="0,0,20,4" FontSize="13"/>
+                                <CheckBox IsChecked="{Binding Encrypt}" Content="Encrypt Connection" Margin="0,0,20,4" FontSize="13"/>
+                                <CheckBox IsChecked="{Binding SaveConnection}" Content="Save this connection" Margin="0,0,0,4" FontSize="13"/>
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Footer: Status + Buttons -->
+            <StackPanel Grid.Row="2" Spacing="12" Margin="0,16,0,0">
+
+                <!-- Status message banner -->
+                <Border IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                        CornerRadius="8" Padding="14,10"
+                        Background="{Binding IsStatusError, Converter={x:Static vm:BoolToStatusBgConverter.Instance}}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="{Binding IsStatusError, Converter={x:Static vm:BoolToStatusIconConverter.Instance}}"
+                                   FontSize="16" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding StatusMessage}" FontSize="13" VerticalAlignment="Center"
+                                   Foreground="{Binding IsStatusError, Converter={x:Static vm:BoolToErrorColorConverter.Instance}}"
+                                   TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
+                <!-- Action buttons -->
+                <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto">
+                    <!-- Test on the left -->
+                    <Button Grid.Column="0"
+                            Command="{Binding TestConnectionCommand}"
+                            IsEnabled="{Binding !IsTesting}"
+                            Classes="secondary-btn">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="&#x26A1;" FontSize="13" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding IsTesting, Converter={x:Static vm:BoolToTestTextConverter.Instance}}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+
+                    <!-- Connect + Cancel on the right -->
+                    <Button Grid.Column="2"
+                            Command="{Binding ConnectCommand}"
+                            IsEnabled="{Binding !IsConnecting}"
+                            Classes="connect-btn">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="&#x1F50C;" FontSize="13" VerticalAlignment="Center"/>
+                            <TextBlock Text="{Binding IsConnecting, Converter={x:Static vm:BoolToConnectTextConverter.Instance}}" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Grid.Column="4" Content="Cancel"
+                            Command="{Binding CancelCommand}"
+                            Classes="secondary-btn"
+                            Margin="8,0,0,0"/>
+                </Grid>
             </StackPanel>
-        </StackPanel>
-    </Grid>
+        </Grid>
+    </Panel>
 </Window>
