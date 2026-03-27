@@ -1,0 +1,129 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:SqlStudio.App.ViewModels"
+        x:Class="SqlStudio.App.Views.ConnectionDialog"
+        x:DataType="vm:ConnectionDialogViewModel"
+        Title="Connect to Server"
+        Width="550" Height="620"
+        WindowStartupLocation="CenterOwner"
+        CanResize="False"
+        ShowInTaskbar="False">
+
+    <Grid RowDefinitions="Auto,*,Auto" Margin="16">
+
+        <!-- Saved Connections -->
+        <Border Grid.Row="0" Margin="0,0,0,12">
+            <StackPanel Spacing="6">
+                <TextBlock Text="Saved Connections" FontWeight="SemiBold" FontSize="14" />
+                <Grid ColumnDefinitions="*,Auto">
+                    <ComboBox Grid.Column="0"
+                              ItemsSource="{Binding SavedConnections}"
+                              SelectedItem="{Binding SelectedSavedConnection}"
+                              PlaceholderText="Select a saved connection..."
+                              HorizontalAlignment="Stretch">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding Name}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <Button Grid.Column="1" Content="Delete" Margin="8,0,0,0"
+                            Command="{Binding DeleteSavedConnectionCommand}"
+                            IsEnabled="{Binding SelectedSavedConnection, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                </Grid>
+            </StackPanel>
+        </Border>
+
+        <!-- Connection Form -->
+        <ScrollViewer Grid.Row="1">
+            <StackPanel Spacing="10">
+                <TextBlock Text="Connection Details" FontWeight="SemiBold" FontSize="14" />
+
+                <!-- Connection Name -->
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Connection Name" FontSize="12" />
+                    <TextBox Text="{Binding ConnectionName}" Watermark="My Server (optional)" />
+                </StackPanel>
+
+                <!-- Server -->
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Server" FontSize="12" />
+                    <TextBox Text="{Binding ServerName}" Watermark="server.database.windows.net or localhost" />
+                </StackPanel>
+
+                <!-- Port -->
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Port" FontSize="12" />
+                    <NumericUpDown Value="{Binding Port}" Minimum="1" Maximum="65535"
+                                   FormatString="0" />
+                </StackPanel>
+
+                <!-- Database -->
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Database" FontSize="12" />
+                    <TextBox Text="{Binding DatabaseName}" Watermark="master" />
+                </StackPanel>
+
+                <!-- Authentication Type -->
+                <StackPanel Spacing="4">
+                    <TextBlock Text="Authentication" FontSize="12" />
+                    <ComboBox ItemsSource="{Binding AuthTypes}"
+                              SelectedItem="{Binding AuthType}"
+                              HorizontalAlignment="Stretch">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </StackPanel>
+
+                <!-- SQL Auth Fields -->
+                <StackPanel Spacing="4" IsVisible="{Binding IsSqlAuth}">
+                    <TextBlock Text="Username" FontSize="12" />
+                    <TextBox Text="{Binding Username}" Watermark="sa" />
+                </StackPanel>
+                <StackPanel Spacing="4" IsVisible="{Binding IsSqlAuth}">
+                    <TextBlock Text="Password" FontSize="12" />
+                    <TextBox Text="{Binding Password}" PasswordChar="*" Watermark="Password" />
+                </StackPanel>
+
+                <!-- Entra Auth Fields -->
+                <StackPanel Spacing="4" IsVisible="{Binding IsEntraAuth}">
+                    <TextBlock Text="Tenant ID (optional)" FontSize="12" />
+                    <TextBox Text="{Binding TenantId}" Watermark="Azure AD Tenant ID" />
+                </StackPanel>
+
+                <!-- Options -->
+                <StackPanel Spacing="6" Margin="0,8,0,0">
+                    <CheckBox IsChecked="{Binding TrustServerCertificate}" Content="Trust Server Certificate" />
+                    <CheckBox IsChecked="{Binding Encrypt}" Content="Encrypt Connection" />
+                    <CheckBox IsChecked="{Binding SaveConnection}" Content="Save this connection" />
+                </StackPanel>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Buttons and Status -->
+        <StackPanel Grid.Row="2" Spacing="8" Margin="0,12,0,0">
+            <!-- Status -->
+            <TextBlock Text="{Binding StatusMessage}" FontSize="12"
+                       IsVisible="{Binding StatusMessage, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                       Foreground="{Binding IsStatusError, Converter={x:Static vm:BoolToErrorColorConverter.Instance}}" />
+
+            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                <Button Content="Test Connection"
+                        Command="{Binding TestConnectionCommand}"
+                        IsEnabled="{Binding !IsTesting}"
+                        Padding="16,8" />
+                <Button Content="Connect"
+                        Command="{Binding ConnectCommand}"
+                        IsEnabled="{Binding !IsConnecting}"
+                        Classes="accent"
+                        Padding="16,8" />
+                <Button Content="Cancel"
+                        Command="{Binding CancelCommand}"
+                        Padding="16,8" />
+            </StackPanel>
+        </StackPanel>
+    </Grid>
+</Window>
