@@ -35,6 +35,7 @@ public partial class ConnectionDialogViewModel : ViewModelBase
     private static string? _armAccessToken;
     private static IPublicClientApplication? _msalApp;
     private static IAccount? _msalAccount;
+    private static string? _cachedEntraEmail;
 
     private static readonly string[] SqlScopes = ["https://database.windows.net/.default"];
     private static readonly string[] ArmScopes = ["https://management.azure.com/.default"];
@@ -131,6 +132,17 @@ public partial class ConnectionDialogViewModel : ViewModelBase
     {
         try { await LoadSavedConnectionsAsync(); } catch { }
         try { await LoadGroupsAsync(); } catch { }
+
+        // If we already signed in during this app session, reuse immediately — NO browser prompt
+        if (_msalAccount != null && _armAccessToken != null && _cachedEntraEmail != null)
+        {
+            EntraUserEmail = _cachedEntraEmail;
+            IsEntraSignedIn = true;
+            try { await DiscoverSubscriptionsAsync(); } catch { }
+            return;
+        }
+
+        // First time: try restoring from persistent MSAL cache
         try { await RestoreEntraCredentialAsync(); } catch { }
     }
 
@@ -256,6 +268,7 @@ public partial class ConnectionDialogViewModel : ViewModelBase
             _msalAccount = account;
             var armResult = await app.AcquireTokenSilent(ArmScopes, account).ExecuteAsync();
             _armAccessToken = armResult.AccessToken;
+            _cachedEntraEmail = email;
 
             try
             {
@@ -390,7 +403,8 @@ public partial class ConnectionDialogViewModel : ViewModelBase
 
             _msalAccount = armResult.Account;
             _armAccessToken = armResult.AccessToken;
-            EntraUserEmail = armResult.Account?.Username ?? "Signed in";
+            _cachedEntraEmail = armResult.Account?.Username ?? "Signed in";
+            EntraUserEmail = _cachedEntraEmail;
 
             // Get SQL token silently — should work now since we pre-consented
             StatusMessage = "Acquiring database credentials...";
@@ -573,15 +587,20 @@ public partial class ConnectionDialogViewModel : ViewModelBase
 
     // ── Incognito browser launcher ────────────────────────────────────
 
+    // Dedicated temp profile dir — forces Chrome to spawn a SEPARATE process
+    // even when Chrome is already running. Without this, Chrome ignores --incognito
+    // and opens the URL as a regular tab in the existing window via IPC.
+    private static readonly string IncognitoProfileDir = Path.Combine(
+        Path.GetTempPath(), "sqlexplorer-auth-profile");
+
     private static Task OpenBrowserInIncognito(Uri uri)
     {
         var url = uri.AbsoluteUri;
 
         if (OperatingSystem.IsMacOS())
         {
-            // IMPORTANT: 'open -na' does NOT work when Chrome is already running —
-            // it just sends the URL to the existing session as a regular tab.
-            // Must call the browser binary directly to force incognito.
+            // The ONLY way to guarantee incognito when Chrome is already running:
+            // --user-data-dir forces a completely separate Chrome process.
             (string binary, string flag)[] macBrowsers =
             [
                 ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "--incognito"),
@@ -589,7 +608,6 @@ public partial class ConnectionDialogViewModel : ViewModelBase
                 ("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "--inprivate"),
                 ("/Applications/Chromium.app/Contents/MacOS/Chromium", "--incognito"),
                 ("/Applications/Vivaldi.app/Contents/MacOS/Vivaldi", "--incognito"),
-                ("/Applications/Firefox.app/Contents/MacOS/firefox", "--private-window"),
             ];
 
             foreach (var (binary, flag) in macBrowsers)
@@ -598,10 +616,23 @@ public partial class ConnectionDialogViewModel : ViewModelBase
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = binary,
-                    Arguments = $"{flag} --new-window \"{url}\"",
+                    Arguments = $"{flag} --no-first-run --no-default-browser-check --user-data-dir=\"{IncognitoProfileDir}\" \"{url}\"",
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
+                });
+                return Task.CompletedTask;
+            }
+
+            // Firefox doesn't need --user-data-dir, it handles --private-window correctly
+            const string firefox = "/Applications/Firefox.app/Contents/MacOS/firefox";
+            if (File.Exists(firefox))
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = firefox,
+                    Arguments = $"--private-window \"{url}\"",
+                    UseShellExecute = false
                 });
                 return Task.CompletedTask;
             }
@@ -618,13 +649,24 @@ public partial class ConnectionDialogViewModel : ViewModelBase
                 (@"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", "--inprivate"),
                 (@"C:\Program Files\Microsoft\Edge\Application\msedge.exe", "--inprivate"),
                 (@"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe", "--incognito"),
-                (@"C:\Program Files\Mozilla Firefox\firefox.exe", "--private-window"),
             ];
 
             foreach (var (path, flag) in winBrowsers)
             {
                 if (!File.Exists(path)) continue;
-                Process.Start(new ProcessStartInfo { FileName = path, Arguments = $"{flag} --new-window \"{url}\"", UseShellExecute = false });
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = path,
+                    Arguments = $"{flag} --no-first-run --no-default-browser-check --user-data-dir=\"{IncognitoProfileDir}\" \"{url}\"",
+                    UseShellExecute = false
+                });
+                return Task.CompletedTask;
+            }
+
+            const string firefoxWin = @"C:\Program Files\Mozilla Firefox\firefox.exe";
+            if (File.Exists(firefoxWin))
+            {
+                Process.Start(new ProcessStartInfo { FileName = firefoxWin, Arguments = $"--private-window \"{url}\"", UseShellExecute = false });
                 return Task.CompletedTask;
             }
 
