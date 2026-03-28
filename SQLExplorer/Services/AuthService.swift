@@ -27,6 +27,8 @@ class AuthService: ObservableObject {
         do {
             let config = MSALPublicClientApplicationConfig(clientId: Self.clientId)
             config.authority = try MSALAuthority(url: URL(string: Self.authority)!)
+            // Use the Azure CLI's registered redirect URI — not the default msauth:// scheme
+            config.redirectUri = "https://login.microsoftonline.com/common/oauth2/nativeclient"
             application = try MSALPublicClientApplication(configuration: config)
         } catch {
             errorMessage = "MSAL setup failed: \(error.localizedDescription)"

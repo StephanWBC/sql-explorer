@@ -62,6 +62,24 @@ for SYBDB in "${SYBDB_PATHS[@]}"; do
     fi
 done
 
+# Generate .icns icon from logo PNGs
+ICONSET="$APP_DIR/Contents/Resources/AppIcon.iconset"
+mkdir -p "$ICONSET"
+LOGO_DIR="SQLExplorer/Resources"
+cp "$LOGO_DIR/logo-16.png"   "$ICONSET/icon_16x16.png"
+cp "$LOGO_DIR/logo-32.png"   "$ICONSET/icon_16x16@2x.png"
+cp "$LOGO_DIR/logo-32.png"   "$ICONSET/icon_32x32.png"
+cp "$LOGO_DIR/logo-64.png"   "$ICONSET/icon_32x32@2x.png"
+cp "$LOGO_DIR/logo-128.png"  "$ICONSET/icon_128x128.png"
+cp "$LOGO_DIR/logo-256.png"  "$ICONSET/icon_128x128@2x.png"
+cp "$LOGO_DIR/logo-256.png"  "$ICONSET/icon_256x256.png"
+cp "$LOGO_DIR/logo-512.png"  "$ICONSET/icon_256x256@2x.png"
+cp "$LOGO_DIR/logo-512.png"  "$ICONSET/icon_512x512.png"
+cp "$LOGO_DIR/logo-1024.png" "$ICONSET/icon_512x512@2x.png"
+iconutil -c icns -o "$APP_DIR/Contents/Resources/AppIcon.icns" "$ICONSET"
+rm -rf "$ICONSET"
+echo "Icon created."
+
 # Create Info.plist
 cat > "$APP_DIR/Contents/Info.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -76,6 +94,8 @@ cat > "$APP_DIR/Contents/Info.plist" << PLIST
     <string>com.sqlexplorer.app</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>CFBundleName</key>
     <string>SQL Explorer</string>
     <key>CFBundlePackageType</key>
