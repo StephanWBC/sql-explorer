@@ -27,14 +27,74 @@ class AuthService: ObservableObject {
     private static let armScopes = ["https://management.azure.com/.default"]
     private static let sqlScopes = ["https://database.windows.net/.default"]
 
-    // We store the MSAL serialized cache blob ourselves
-    private static let cacheKeychainKey = "com.sqlexplorer.msal-token-cache"
-    private static let emailKeychainKey = "com.sqlexplorer.user-email"
-    private static let accountIdKeychainKey = "com.sqlexplorer.account-id"
+    private static let storeDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".sqlexplorer")
+    private static let cacheFile = storeDir.appendingPathComponent("msal-cache.json")
+    private static let emailFile = storeDir.appendingPathComponent("auth-email.txt")
+
+    // MSAL Keychain identifiers (where MSAL reads/writes its cache)
+    private static let msalKeychainService = "SqlExplorer"
+    private static let msalKeychainAccount = "MSALTokenCache"
 
     init() {
+        restoreMSALCacheFromFile()  // BEFORE MSAL init — inject cache into Keychain
         setupMSAL()
         Task { await tryRestoreSession() }
+    }
+
+    /// Restore MSAL's Keychain cache from our file backup
+    /// This is needed because each DMG build has a different ad-hoc signature,
+    /// so Keychain items from the previous build are inaccessible.
+    /// We save the cache blob to a file and restore it before MSAL initializes.
+    private func restoreMSALCacheFromFile() {
+        guard let data = try? Data(contentsOf: Self.cacheFile) else { return }
+        print("[Auth] Restoring MSAL cache from file (\(data.count) bytes)")
+
+        // Write the cache blob to Keychain where MSAL will find it
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.msalKeychainService,
+            kSecAttrAccount as String: Self.msalKeychainAccount,
+        ]
+        SecItemDelete(query as CFDictionary)
+        var addQuery = query
+        addQuery[kSecValueData as String] = data
+        let status = SecItemAdd(addQuery as CFDictionary, nil)
+        print("[Auth] Keychain restore status: \(status) (0=success)")
+    }
+
+    /// Save MSAL's Keychain cache to our file backup
+    private func saveMSALCacheToFile() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.msalKeychainService,
+            kSecAttrAccount as String: Self.msalKeychainAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess, let data = result as? Data else {
+            print("[Auth] Could not read MSAL cache from Keychain: \(status)")
+            return
+        }
+
+        try? FileManager.default.createDirectory(at: Self.storeDir, withIntermediateDirectories: true)
+        try? data.write(to: Self.cacheFile, options: .atomic)
+        print("[Auth] Saved MSAL cache to file (\(data.count) bytes)")
+    }
+
+    private func saveEmail(_ email: String) {
+        try? FileManager.default.createDirectory(at: Self.storeDir, withIntermediateDirectories: true)
+        try? email.write(to: Self.emailFile, atomically: true, encoding: .utf8)
+    }
+
+    private func loadSavedEmail() -> String? {
+        try? String(contentsOf: Self.emailFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func clearAllPersistence() {
+        try? FileManager.default.removeItem(at: Self.cacheFile)
+        try? FileManager.default.removeItem(at: Self.emailFile)
     }
 
     private func setupMSAL() {
@@ -54,7 +114,7 @@ class AuthService: ObservableObject {
         guard let app = application else { return }
 
         // Check if we have a saved email (means user logged in before)
-        guard let savedEmail = KeychainHelper.load(key: Self.emailKeychainKey) else {
+        guard let savedEmail = loadSavedEmail() ?? KeychainHelper.load(key: "com.sqlexplorer.user-email") else {
             print("[Auth] No saved email — first launch, user must sign in")
             return
         }
@@ -74,6 +134,7 @@ class AuthService: ObservableObject {
                 let result = try await app.acquireTokenSilent(with: params)
                 armAccessToken = result.accessToken
                 isSignedIn = true
+                saveMSALCacheToFile()  // Keep file backup fresh
                 print("[Auth] ✅ Restored from MSAL cache")
                 await discoverSubscriptions()
                 return
@@ -83,7 +144,7 @@ class AuthService: ObservableObject {
         }
 
         // MSAL cache empty — try finding by saved account ID
-        if let savedId = KeychainHelper.load(key: Self.accountIdKeychainKey) {
+        if let savedId = KeychainHelper.load(key: "com.sqlexplorer.account-id") {
             do {
                 let acct = try app.account(forIdentifier: savedId)
                 self.account = acct
@@ -91,6 +152,7 @@ class AuthService: ObservableObject {
                 let result = try await app.acquireTokenSilent(with: params)
                 armAccessToken = result.accessToken
                 isSignedIn = true
+                saveMSALCacheToFile()
                 print("[Auth] ✅ Restored from saved account ID")
                 await discoverSubscriptions()
                 return
@@ -125,19 +187,21 @@ class AuthService: ObservableObject {
             isSignedIn = true
             errorMessage = nil
 
-            // PERSIST: save account info so we can restore on next launch
+            // PERSIST: save everything so next launch restores instantly
             let accountId = result.account.identifier ?? ""
-            KeychainHelper.save(key: Self.emailKeychainKey, value: userEmail)
-            KeychainHelper.save(key: Self.accountIdKeychainKey, value: accountId)
+            KeychainHelper.save(key: "com.sqlexplorer.user-email", value: userEmail)
+            KeychainHelper.save(key: "com.sqlexplorer.account-id", value: accountId)
+            saveEmail(userEmail)
+            saveMSALCacheToFile()  // THE CRITICAL CALL — saves MSAL's token cache blob to file
             print("[Auth] ✅ Signed in and persisted: \(userEmail)")
 
             // Also try to pre-consent SQL scope so connect doesn't prompt later
             do {
                 let sqlParams = MSALSilentTokenParameters(scopes: Self.sqlScopes, account: result.account)
                 _ = try await app.acquireTokenSilent(with: sqlParams)
+                saveMSALCacheToFile()  // Update file after SQL consent
                 print("[Auth] SQL scope pre-consented silently")
             } catch {
-                // Will be consented interactively when connecting
                 print("[Auth] SQL scope not yet consented (will prompt on connect)")
             }
 
@@ -161,9 +225,9 @@ class AuthService: ObservableObject {
         selectedSubscription = nil
         errorMessage = nil
 
-        KeychainHelper.delete(key: Self.emailKeychainKey)
-        KeychainHelper.delete(key: Self.accountIdKeychainKey)
-        KeychainHelper.delete(key: Self.cacheKeychainKey)
+        KeychainHelper.delete(key: "com.sqlexplorer.user-email")
+        KeychainHelper.delete(key: "com.sqlexplorer.account-id")
+        KeychainHelper.delete(key: "com.sqlexplorer.msal-cache")
         print("[Auth] Signed out — all data cleared")
     }
 
