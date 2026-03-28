@@ -57,13 +57,16 @@ class AuthService: ObservableObject {
         }
     }
 
-    /// Interactive sign-in — opens system auth session (always private, no Chrome hacking)
+    /// Interactive sign-in using embedded WKWebView
+    /// WKWebView can capture the nativeclient redirect (ASWebAuthenticationSession cannot)
     func signIn() async {
         guard let app = application else { return }
 
         do {
-            let params = MSALInteractiveTokenParameters(scopes: Self.armScopes)
-            // ASWebAuthenticationSession handles the browser — always a private session
+            let webviewParams = MSALWebviewParameters()
+            webviewParams.webviewType = .wkWebView  // Embedded — captures nativeclient redirect
+
+            let params = MSALInteractiveTokenParameters(scopes: Self.armScopes, webviewParameters: webviewParams)
             params.promptType = .selectAccount
 
             let result = try await app.acquireToken(with: params)
