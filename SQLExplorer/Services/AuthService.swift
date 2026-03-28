@@ -51,8 +51,12 @@ class AuthService: ObservableObject {
             config.authority = try MSALAuthority(url: URL(string: Self.authority)!)
             config.redirectUri = "https://login.microsoftonline.com/common/oauth2/nativeclient"
 
+            // CRITICAL: Set Keychain group to our own bundle ID
+            // Without this, MSAL uses "com.microsoft.adalcache" which ad-hoc signed apps can't access reliably
+            config.cacheConfig.keychainSharingGroup = "com.sqlexplorer.app"
+
             application = try MSALPublicClientApplication(configuration: config)
-            print("[Auth] MSAL initialized successfully")
+            print("[Auth] MSAL initialized with Keychain group: com.sqlexplorer.app")
         } catch {
             print("[Auth] MSAL setup failed: \(error)")
             errorMessage = "MSAL setup failed: \(error.localizedDescription)"
