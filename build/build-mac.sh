@@ -34,10 +34,10 @@ fi
 
 if [ -d "$MSAL_FW" ]; then
     echo "Copying MSAL.framework from $MSAL_FW"
-    cp -R "$MSAL_FW" "$APP_DIR/Contents/Frameworks/"
+    # Use -RL to dereference symlinks — prevents Error -36 in Finder copy
+    cp -RL "$MSAL_FW" "$APP_DIR/Contents/Frameworks/"
 
-    # Fix rpath: the binary looks for @rpath/MSAL.framework
-    # Add the Frameworks directory to rpath
+    # Fix rpath
     install_name_tool -add_rpath @executable_path/../Frameworks "$APP_DIR/Contents/MacOS/SQLExplorer" 2>/dev/null || true
 
     # Sign the framework
