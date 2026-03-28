@@ -311,13 +311,13 @@ struct ConnectionSheet: View {
                 appState.connectionStore.saveConnection(saved)
             }
 
-            let serverNode = DatabaseObject(
+            let envLabel = environmentLabel == .custom ? customEnvironment : environmentLabel?.rawValue
+            appState.addServerToExplorer(
                 name: displayName,
                 connectionId: connId,
-                objectType: .server,
-                isExpandable: true
+                groupId: selectedGroup?.id,
+                environmentLabel: envLabel
             )
-            appState.explorerNodes.append(serverNode)
             dismiss()
         } catch {
             statusMessage = "Error: \(error.localizedDescription)"

@@ -11,18 +11,34 @@ struct ObjectExplorerRow: View {
                 .frame(width: 16)
 
             Text(node.name)
-                .font(.system(size: 12, weight: node.objectType == .connectionGroup ? .bold : .regular))
+                .font(.system(size: 12, weight: isGroupOrServer ? .semibold : .regular))
                 .lineLimit(1)
 
-            Spacer()
-
-            if node.isLoading {
-                ProgressView()
-                    .scaleEffect(0.5)
-                    .frame(width: 16, height: 16)
+            // Environment badge
+            if let env = node.environmentLabel, !env.isEmpty {
+                Text(env)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(EnvironmentLabel.from(env)?.color ?? .secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(EnvironmentLabel.from(env)?.badgeBackground ?? Color.clear)
+                    .clipShape(Capsule())
             }
+
+            // Child count for groups
+            if node.objectType == .connectionGroup {
+                Text("(\(node.children.count))")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
         }
         .padding(.vertical, 1)
+    }
+
+    private var isGroupOrServer: Bool {
+        node.objectType == .connectionGroup || node.objectType == .server
     }
 
     private var iconColor: Color {
@@ -39,9 +55,4 @@ struct ObjectExplorerRow: View {
         default: return .secondary
         }
     }
-}
-
-// Add isLoading to DatabaseObject
-extension DatabaseObject {
-    @MainActor var isLoading: Bool { false } // TODO: implement loading state
 }

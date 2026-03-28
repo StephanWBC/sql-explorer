@@ -26,6 +26,8 @@ class DatabaseObject: Identifiable, ObservableObject {
     var isExpandable: Bool
     @Published var isLoaded: Bool = false
     @Published var children: [DatabaseObject] = []
+    var groupId: UUID?
+    var environmentLabel: String?
 
     init(
         name: String,
