@@ -10,6 +10,12 @@ struct MainView: View {
         HSplitView {
             // Left: Object Explorer
             VStack(spacing: 0) {
+                // Account banner — always visible
+                AccountBannerView()
+                    .environmentObject(appState)
+
+                Divider()
+
                 // Explorer header
                 HStack {
                     Text("EXPLORER")
