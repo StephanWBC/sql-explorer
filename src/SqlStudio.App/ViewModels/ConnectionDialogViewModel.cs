@@ -136,6 +136,9 @@ public partial class ConnectionDialogViewModel : ViewModelBase
         AvailableGroups.Clear();
         foreach (var g in groups)
             AvailableGroups.Add(g);
+        // Auto-select first group if only one exists
+        if (AvailableGroups.Count == 1)
+            SelectedGroup = AvailableGroups[0];
     }
 
     [RelayCommand]
@@ -263,7 +266,14 @@ public partial class ConnectionDialogViewModel : ViewModelBase
         StatusMessage = $"Loading databases for {value.Name}...";
         IsStatusError = false;
 
-        _ = Task.Run(async () => { try { await LoadDatabasesForSubscriptionAsync(value); } catch { } });
+        _ = SafeLoadDatabasesAsync(value);
+    }
+
+    private async Task SafeLoadDatabasesAsync(AzureSubscription sub)
+    {
+        try { await LoadDatabasesForSubscriptionAsync(sub); }
+        catch (Exception ex) { StatusMessage = $"Error: {ex.Message}"; IsStatusError = true; }
+        finally { IsLoadingDatabases = false; }
     }
 
     partial void OnSelectedSavedConnectionChanged(SavedConnection? value)
@@ -278,6 +288,11 @@ public partial class ConnectionDialogViewModel : ViewModelBase
         TrustServerCertificate = value.TrustServerCertificate;
         Encrypt = value.Encrypt;
         ConnectionName = value.Name;
+        EnvironmentLabel = value.EnvironmentLabel ?? string.Empty;
+        // Match group by ID
+        SelectedGroup = value.GroupId != null
+            ? AvailableGroups.FirstOrDefault(g => g.Id == value.GroupId)
+            : null;
     }
 
     private async Task LoadSavedConnectionsAsync()
