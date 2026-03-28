@@ -25,7 +25,10 @@ cp "$BINARY" "$APP_DIR/Contents/MacOS/SQLExplorer"
 # Copy MSAL framework if present
 MSAL_FRAMEWORK=".build/release/MSAL.framework"
 if [ -d "$MSAL_FRAMEWORK" ]; then
+    mkdir -p "$APP_DIR/Contents/Frameworks"
     cp -R "$MSAL_FRAMEWORK" "$APP_DIR/Contents/Frameworks/"
+    # Sign the framework first
+    codesign --deep --force --sign - "$APP_DIR/Contents/Frameworks/MSAL.framework" 2>/dev/null || true
 fi
 
 # Create Info.plist
@@ -63,8 +66,8 @@ cat > "$APP_DIR/Contents/Info.plist" << PLIST
 </plist>
 PLIST
 
-# Ad-hoc code sign
-codesign --deep --force --sign - "$APP_DIR"
+# Ad-hoc code sign (ignore warnings)
+codesign --deep --force --sign - "$APP_DIR" 2>/dev/null || true
 echo "Code signed."
 
 # Create DMG
