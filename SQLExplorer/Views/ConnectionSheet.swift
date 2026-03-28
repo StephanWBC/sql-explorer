@@ -142,8 +142,8 @@ struct ConnectionSheet: View {
                     }
                 }
 
-                // Group + Environment
-                Section("Organization") {
+                // Group
+                Section("Group") {
                     HStack {
                         Picker("Group", selection: $selectedGroup) {
                             Text("No group").tag(nil as ConnectionGroup?)
@@ -151,26 +151,41 @@ struct ConnectionSheet: View {
                                 Text(group.name).tag(group as ConnectionGroup?)
                             }
                         }
-                        Button(action: { isCreatingGroup = true }) {
+                        Button(action: {
+                            newGroupName = ""
+                            isCreatingGroup = true
+                        }) {
                             Image(systemName: "plus")
                         }
                     }
+                }
 
-                    if isCreatingGroup {
+                if isCreatingGroup {
+                    Section("New Group") {
+                        TextField("Enter group name", text: $newGroupName)
+                            .textFieldStyle(.roundedBorder)
                         HStack {
-                            TextField("Group name", text: $newGroupName)
+                            Spacer()
+                            Button("Cancel") {
+                                isCreatingGroup = false
+                                newGroupName = ""
+                            }
                             Button("Create") {
-                                let group = ConnectionGroup(name: newGroupName)
+                                guard !newGroupName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                                let group = ConnectionGroup(name: newGroupName.trimmingCharacters(in: .whitespaces))
                                 appState.connectionStore.saveGroup(group)
                                 selectedGroup = group
                                 isCreatingGroup = false
                                 newGroupName = ""
                             }
-                            .disabled(newGroupName.isEmpty)
-                            Button("Cancel") { isCreatingGroup = false }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(newGroupName.trimmingCharacters(in: .whitespaces).isEmpty)
                         }
                     }
+                }
 
+                // Environment
+                Section("Environment") {
                     Picker("Environment", selection: $environmentLabel) {
                         Text("None").tag(nil as EnvironmentLabel?)
                         ForEach(EnvironmentLabel.allCases.filter { $0 != .custom }) { env in
