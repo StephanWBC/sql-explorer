@@ -26,6 +26,7 @@ public class ObjectTypeToIconConverter : IValueConverter
             DatabaseObjectType.PrimaryKey => "\U0001F511",   // key
             DatabaseObjectType.Folder => "\U0001F4C1",       // folder
             DatabaseObjectType.Trigger => "\u26A1",          // lightning
+            DatabaseObjectType.ConnectionGroup => "\U0001F4E6", // package
             _ => "\u2022"                                     // bullet
         };
     }

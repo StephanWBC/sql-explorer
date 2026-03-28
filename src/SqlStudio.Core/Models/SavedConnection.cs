@@ -14,4 +14,6 @@ public class SavedConnection
     public bool Encrypt { get; set; } = true;
     public int Port { get; set; } = 1433;
     public DateTime LastConnected { get; set; }
+    public Guid? GroupId { get; set; }
+    public string? EnvironmentLabel { get; set; }
 }

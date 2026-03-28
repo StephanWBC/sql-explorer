@@ -15,24 +15,34 @@ public partial class ObjectExplorerNodeViewModel : ViewModelBase
     [ObservableProperty] private bool _isExpanded;
     [ObservableProperty] private bool _isLoading;
 
+    // Environment badge
+    [ObservableProperty] private string? _environmentLabel;
+    [ObservableProperty] private bool _hasEnvironmentLabel;
+    [ObservableProperty] private bool _isGroupNode;
+
     public DatabaseObject Model { get; }
     public ObservableCollection<ObjectExplorerNodeViewModel> Children { get; } = new();
 
-    // Event to open a new query tab with script content
     public event EventHandler<string>? ScriptRequested;
     public event EventHandler<(Guid ConnectionId, string Database, string Sql)>? ExecuteRequested;
 
-    public ObjectExplorerNodeViewModel(DatabaseObject model, IObjectExplorerService? objectExplorerService = null, IScriptGenerationService? scriptService = null)
+    public ObjectExplorerNodeViewModel(
+        DatabaseObject model,
+        IObjectExplorerService? objectExplorerService = null,
+        IScriptGenerationService? scriptService = null,
+        string? environmentLabel = null)
     {
         Model = model;
         _objectExplorerService = objectExplorerService;
         _scriptService = scriptService;
         Name = model.Name;
         ObjectType = model.ObjectType;
+        EnvironmentLabel = environmentLabel;
+        HasEnvironmentLabel = !string.IsNullOrWhiteSpace(environmentLabel);
+        IsGroupNode = model.ObjectType == DatabaseObjectType.ConnectionGroup;
 
         if (model.IsExpandable && !model.IsLoaded)
         {
-            // Add dummy child for expand arrow
             Children.Add(new ObjectExplorerNodeViewModel(new DatabaseObject { Name = "Loading..." }));
         }
     }
@@ -68,6 +78,9 @@ public partial class ObjectExplorerNodeViewModel : ViewModelBase
                 case DatabaseObjectType.Table:
                 case DatabaseObjectType.View:
                     await LoadTableDetailsAsync();
+                    break;
+                case DatabaseObjectType.ConnectionGroup:
+                    // Group children are managed externally by MainWindowViewModel
                     break;
             }
         }
@@ -124,7 +137,7 @@ public partial class ObjectExplorerNodeViewModel : ViewModelBase
                 var tables = await _objectExplorerService!.GetTablesAsync(Model.ConnectionId, Model.Database);
                 foreach (var t in tables)
                 {
-                    var node = new ObjectExplorerNodeViewModel(
+                    Children.Add(new ObjectExplorerNodeViewModel(
                         new DatabaseObject
                         {
                             Name = $"{t.Schema}.{t.Name}",
@@ -133,8 +146,7 @@ public partial class ObjectExplorerNodeViewModel : ViewModelBase
                             ObjectType = DatabaseObjectType.Table,
                             IsExpandable = true,
                             Database = Model.Database
-                        }, _objectExplorerService, _scriptService);
-                    Children.Add(node);
+                        }, _objectExplorerService, _scriptService));
                 }
                 break;
 
@@ -190,8 +202,6 @@ public partial class ObjectExplorerNodeViewModel : ViewModelBase
                 break;
 
             case "Columns":
-                var parentTable = Model.Name == "Columns" ? null : Model;
-                // Columns are loaded by the parent table node
                 break;
         }
     }
@@ -215,7 +225,6 @@ public partial class ObjectExplorerNodeViewModel : ViewModelBase
                     Database = Model.Database
                 }, _objectExplorerService, _scriptService);
 
-            // Pre-load columns for the Columns folder
             if (folder == "Columns")
             {
                 try

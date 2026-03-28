@@ -68,12 +68,17 @@ public partial class ConnectionDialogViewModel : ViewModelBase
     [ObservableProperty] private bool _hasSubscriptions;
     [ObservableProperty] private AzureSubscription? _selectedSubscription;
 
-    // Subscription filter — not "All", just one per subscription
+    // Connection group + environment
+    [ObservableProperty] private ConnectionGroup? _selectedGroup;
+    [ObservableProperty] private string _environmentLabel = string.Empty;
+
     private readonly List<AzureDatabase> _allDatabases = new();
 
     public ObservableCollection<SavedConnection> SavedConnections { get; } = new();
     public ObservableCollection<AzureDatabase> AvailableDatabases { get; } = new();
     public ObservableCollection<AzureSubscription> AvailableSubscriptions { get; } = new();
+    public ObservableCollection<ConnectionGroup> AvailableGroups { get; } = new();
+    public ObservableCollection<string> EnvironmentPresets { get; } = new(EnvironmentType.Presets);
     public ObservableCollection<string> AuthTypeNames { get; } = new()
     {
         "SQL Authentication",
@@ -108,6 +113,7 @@ public partial class ConnectionDialogViewModel : ViewModelBase
     public bool DialogResult { get; private set; }
     public ConnectionInfo? ResultConnection { get; private set; }
     public Guid? ResultConnectionId { get; private set; }
+    public SavedConnection? ResultSavedConnection { get; private set; }
     public event EventHandler? CloseRequested;
 
     public ConnectionDialogViewModel(IConnectionManager connectionManager, IConnectionStore connectionStore)
@@ -115,7 +121,26 @@ public partial class ConnectionDialogViewModel : ViewModelBase
         _connectionManager = connectionManager;
         _connectionStore = connectionStore;
         _ = LoadSavedConnectionsAsync();
+        _ = LoadGroupsAsync();
         _ = RestoreEntraCredentialAsync();
+    }
+
+    private async Task LoadGroupsAsync()
+    {
+        var groups = await _connectionStore.GetGroupsAsync();
+        AvailableGroups.Clear();
+        foreach (var g in groups)
+            AvailableGroups.Add(g);
+    }
+
+    [RelayCommand]
+    private async Task CreateGroupAsync()
+    {
+        // Create a new group with a default name — user edits inline
+        var group = new ConnectionGroup { Name = $"New Group {AvailableGroups.Count + 1}" };
+        await _connectionStore.SaveGroupAsync(group);
+        AvailableGroups.Add(group);
+        SelectedGroup = group;
     }
 
     // ── MSAL with persistent token cache ──────────────────────────────
@@ -137,8 +162,7 @@ public partial class ConnectionDialogViewModel : ViewModelBase
         // Persistent token cache — survives app restarts
         Directory.CreateDirectory(CredDir);
         var storageProps = new StorageCreationPropertiesBuilder("msal_cache.bin", CredDir)
-            .WithMacKeyChain("SqlExplorer", "MSALTokenCache")
-            .WithLinuxUnprotectedFile() // fallback for Linux
+            .WithUnprotectedFile()
             .Build();
 
         var cacheHelper = await MsalCacheHelper.CreateAsync(storageProps);
@@ -571,28 +595,31 @@ public partial class ConnectionDialogViewModel : ViewModelBase
             var info = BuildConnectionInfo();
             var connectionId = await _connectionManager.ConnectAsync(info);
 
-            if (SaveConnection)
+            var savedConn = new SavedConnection
             {
-                await _connectionStore.SaveAsync(new SavedConnection
-                {
-                    Id = info.Id,
-                    Name = string.IsNullOrWhiteSpace(ConnectionName)
-                        ? (IsEntraSignedIn ? $"{DatabaseName} ({EntraUserEmail})" : ServerName)
-                        : ConnectionName,
-                    Server = ServerName,
-                    Port = Port,
-                    Database = DatabaseName,
-                    AuthType = AuthType,
-                    Username = AuthType == ConnectionAuthType.SqlAuthentication ? Username : EntraUserEmail,
-                    TenantId = AuthType != ConnectionAuthType.SqlAuthentication ? TenantId : null,
-                    TrustServerCertificate = TrustServerCertificate,
-                    Encrypt = Encrypt,
-                    LastConnected = DateTime.UtcNow
-                });
-            }
+                Id = info.Id,
+                Name = string.IsNullOrWhiteSpace(ConnectionName)
+                    ? (IsEntraSignedIn ? $"{DatabaseName} ({EntraUserEmail})" : ServerName)
+                    : ConnectionName,
+                Server = ServerName,
+                Port = Port,
+                Database = DatabaseName,
+                AuthType = AuthType,
+                Username = AuthType == ConnectionAuthType.SqlAuthentication ? Username : EntraUserEmail,
+                TenantId = AuthType != ConnectionAuthType.SqlAuthentication ? TenantId : null,
+                TrustServerCertificate = TrustServerCertificate,
+                Encrypt = Encrypt,
+                LastConnected = DateTime.UtcNow,
+                GroupId = SelectedGroup?.Id,
+                EnvironmentLabel = string.IsNullOrWhiteSpace(EnvironmentLabel) ? null : EnvironmentLabel.Trim()
+            };
+
+            if (SaveConnection)
+                await _connectionStore.SaveAsync(savedConn);
 
             ResultConnection = info;
             ResultConnectionId = connectionId;
+            ResultSavedConnection = savedConn;
             DialogResult = true;
             CloseRequested?.Invoke(this, EventArgs.Empty);
         }

@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="using:SqlStudio.App.ViewModels"
+        xmlns:models="using:SqlStudio.Core.Models"
         x:Class="SqlStudio.App.Views.ConnectionDialog"
         x:DataType="vm:ConnectionDialogViewModel"
         Title="Connect to Server"
@@ -208,10 +209,44 @@
                         <TextBox Text="{Binding DatabaseName}" Watermark="master"/>
                     </StackPanel>
 
+                    <!-- Connection Group + Environment -->
+                    <Grid ColumnDefinitions="*,Auto,16,*">
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <TextBlock Text="GROUP" Classes="lbl"/>
+                            <Grid ColumnDefinitions="*,Auto">
+                                <ComboBox Grid.Column="0"
+                                          ItemsSource="{Binding AvailableGroups}"
+                                          SelectedItem="{Binding SelectedGroup}"
+                                          PlaceholderText="No group"
+                                          HorizontalAlignment="Stretch">
+                                    <ComboBox.ItemTemplate>
+                                        <DataTemplate x:DataType="models:ConnectionGroup">
+                                            <TextBlock Text="{Binding Name}"/>
+                                        </DataTemplate>
+                                    </ComboBox.ItemTemplate>
+                                </ComboBox>
+                                <Button Grid.Column="1" Content="+" Margin="4,0,0,0"
+                                        Classes="ghost" ToolTip.Tip="Create new group"
+                                        Command="{Binding CreateGroupCommand}"
+                                        FontWeight="Bold" FontSize="14" Padding="8,4"/>
+                            </Grid>
+                        </StackPanel>
+                        <StackPanel Grid.Column="3" Spacing="2">
+                            <TextBlock Text="ENVIRONMENT" Classes="lbl"/>
+                            <AutoCompleteBox ItemsSource="{Binding EnvironmentPresets}"
+                                            Text="{Binding EnvironmentLabel}"
+                                            Watermark="e.g. prod, staging, dev"
+                                            FilterMode="Contains"
+                                            HorizontalAlignment="Stretch"
+                                            FontSize="13"
+                                            CornerRadius="6"/>
+                        </StackPanel>
+                    </Grid>
+
                     <!-- Connection name -->
                     <StackPanel Spacing="2">
                         <TextBlock Text="CONNECTION NAME (optional)" Classes="lbl"/>
-                        <TextBox Text="{Binding ConnectionName}" Watermark="e.g. Production, Dev Server"/>
+                        <TextBox Text="{Binding ConnectionName}" Watermark="e.g. BLMS Prod, Auth Dev"/>
                     </StackPanel>
 
                     <!-- Options row -->

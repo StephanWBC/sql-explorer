@@ -37,7 +37,7 @@ public partial class MainWindow : Window
         if (vm.DialogResult && vm.ResultConnection != null && vm.ResultConnectionId != null)
         {
             var mainVm = (MainWindowViewModel)DataContext!;
-            mainVm.OnConnected(vm.ResultConnectionId.Value, vm.ResultConnection);
+            mainVm.OnConnected(vm.ResultConnectionId.Value, vm.ResultConnection, vm.ResultSavedConnection);
         }
     }
 

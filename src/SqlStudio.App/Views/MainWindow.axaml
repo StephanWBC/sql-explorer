@@ -7,14 +7,15 @@
         Icon="/Assets/logo.png"
         Width="1400" Height="900"
         MinWidth="800" MinHeight="600"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource AppBg}">
 
     <Design.DataContext>
         <vm:MainWindowViewModel />
     </Design.DataContext>
 
     <DockPanel>
-        <!-- Menu Bar -->
+        <!-- ── Menu Bar ──────────────────────────────────────────── -->
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
                 <MenuItem Header="_Connect" Command="{Binding ConnectCommand}" InputGesture="Ctrl+N" />
@@ -34,78 +35,118 @@
             </MenuItem>
         </Menu>
 
-        <!-- Toolbar -->
-        <Border DockPanel.Dock="Top" Background="{DynamicResource SystemChromeMediumColor}" Padding="4">
-            <StackPanel Orientation="Horizontal" Spacing="4">
-                <!-- App Logo -->
-                <Image Source="/Assets/logo.png" Width="26" Height="26" Margin="4,0,6,0"/>
+        <!-- ── Toolbar ───────────────────────────────────────────── -->
+        <Border DockPanel.Dock="Top" Background="{DynamicResource SurfaceBg}" Padding="6,3"
+                BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="0,0,0,1">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="1">
+                    <Image Source="/Assets/logo.png" Width="20" Height="20" Margin="4,0,10,0"/>
 
-                <TextBlock Text="SQL Explorer" VerticalAlignment="Center" FontWeight="SemiBold"
-                           FontSize="14" Margin="0,0,10,0" Foreground="{DynamicResource SystemBaseHighColor}" />
+                    <Button Content="Connect" Command="{Binding ConnectCommand}"
+                            Classes="toolPrimary" ToolTip.Tip="New connection (Ctrl+N)"/>
+                    <Button Content="Disconnect" Command="{Binding DisconnectCommand}"
+                            IsEnabled="{Binding IsConnected}" Classes="tool" ToolTip.Tip="Disconnect"/>
 
-                <Button Content="Connect" Command="{Binding ConnectCommand}"
-                        Classes="accent" Padding="12,6" />
-                <Button Content="Disconnect" Command="{Binding DisconnectCommand}"
-                        IsEnabled="{Binding IsConnected}" Padding="12,6" />
+                    <Border Width="1" Background="{DynamicResource BorderSubtle}" Margin="6,5" />
 
-                <Border Width="1" Background="{DynamicResource SystemBaseMediumLowColor}" Margin="4,2" />
+                    <Button Command="{Binding NewQueryCommand}" IsEnabled="{Binding IsConnected}"
+                            Classes="tool" ToolTip.Tip="New query tab (Ctrl+T)">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBlock Text="+" FontSize="14" FontWeight="Bold" VerticalAlignment="Center" Margin="0,-1,0,0"/>
+                            <TextBlock Text="Query" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
 
-                <Button Content="New Query" Command="{Binding NewQueryCommand}"
-                        IsEnabled="{Binding IsConnected}" Padding="12,6" />
+                    <Border Width="1" Background="{DynamicResource BorderSubtle}" Margin="6,5" />
 
-                <Border Width="1" Background="{DynamicResource SystemBaseMediumLowColor}" Margin="4,2" />
+                    <Button Command="{Binding ExecuteQueryCommand}" IsEnabled="{Binding IsConnected}"
+                            Classes="toolExec" ToolTip.Tip="Execute query (F5)">
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <TextBlock Text="&#9654;" FontSize="9" VerticalAlignment="Center"/>
+                            <TextBlock Text="Run" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Content="Stop" Command="{Binding CancelQueryCommand}"
+                            Classes="tool" ToolTip.Tip="Cancel execution"/>
 
-                <Button Content="&#9654; Execute" Command="{Binding ExecuteQueryCommand}"
-                        IsEnabled="{Binding IsConnected}" Padding="12,6" FontWeight="Bold" Classes="accent" />
-                <Button Content="Cancel" Command="{Binding CancelQueryCommand}"
-                        Padding="12,6" />
+                    <Border Width="1" Background="{DynamicResource BorderSubtle}" Margin="6,5" />
 
-                <Border Width="1" Background="{DynamicResource SystemBaseMediumLowColor}" Margin="4,2" />
+                    <Button Content="Export" Command="{Binding ExportResultsCommand}"
+                            Classes="tool" ToolTip.Tip="Export results to CSV"/>
+                </StackPanel>
 
-                <Button Content="Export CSV" Command="{Binding ExportResultsCommand}"
-                        Padding="12,6" />
-
-                <Border Width="1" Background="{DynamicResource SystemBaseMediumLowColor}" Margin="4,2" />
-
-                <Button Command="{Binding ToggleThemeCommand}" Padding="12,6" ToolTip.Tip="Toggle Dark/Light Theme">
-                    <TextBlock Text="&#x263C;" FontSize="16" />
-                </Button>
-            </StackPanel>
-        </Border>
-
-        <!-- Status Bar -->
-        <Border DockPanel.Dock="Bottom" Padding="8,4" Background="{DynamicResource SystemChromeMediumColor}">
-            <Grid ColumnDefinitions="*,Auto,Auto,Auto">
-                <TextBlock Grid.Column="0" Text="{Binding StatusBarText}" VerticalAlignment="Center" FontSize="12" />
-                <TextBlock Grid.Column="1" Text="{Binding ConnectionStatus}" Margin="16,0"
-                           VerticalAlignment="Center" FontSize="12" />
-                <TextBlock Grid.Column="2" Text="{Binding CurrentDatabase, StringFormat='Database: {0}'}"
-                           Margin="16,0" VerticalAlignment="Center" FontSize="12"
-                           IsVisible="{Binding IsConnected}" />
-                <TextBlock Grid.Column="3" Text="{Binding ActiveConnectionName}"
-                           Margin="16,0" VerticalAlignment="Center" FontSize="12" FontWeight="SemiBold"
-                           IsVisible="{Binding IsConnected}" />
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Button Command="{Binding ToggleThemeCommand}" Classes="tool"
+                            ToolTip.Tip="Toggle theme" Padding="6,5">
+                        <TextBlock Text="&#x263C;" FontSize="14" />
+                    </Button>
+                </StackPanel>
             </Grid>
         </Border>
 
-        <!-- Main Content -->
-        <Grid ColumnDefinitions="280,Auto,*">
+        <!-- ── Status Bar ────────────────────────────────────────── -->
+        <Border DockPanel.Dock="Bottom" Padding="10,3" Background="{DynamicResource SurfaceBg}"
+                BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="0,1,0,0">
+            <Grid ColumnDefinitions="Auto,8,*,Auto,Auto,Auto">
+                <!-- Connection indicator dot -->
+                <Ellipse Grid.Column="0" Width="7" Height="7" VerticalAlignment="Center">
+                    <Ellipse.Fill>
+                        <SolidColorBrush Color="{Binding IsConnected, Converter={x:Static vm:BoolToConnectionDotConverter.Instance}}"/>
+                    </Ellipse.Fill>
+                </Ellipse>
+                <TextBlock Grid.Column="2" Text="{Binding StatusBarText}" VerticalAlignment="Center"
+                           FontSize="11" Foreground="{DynamicResource TextSecondary}" />
+                <TextBlock Grid.Column="3" Text="{Binding ConnectionStatus}" Margin="16,0"
+                           VerticalAlignment="Center" FontSize="11" Foreground="{DynamicResource TextSecondary}" />
+                <TextBlock Grid.Column="4" Text="{Binding CurrentDatabase, StringFormat='DB: {0}'}"
+                           Margin="16,0" VerticalAlignment="Center" FontSize="11"
+                           IsVisible="{Binding IsConnected}" Foreground="{DynamicResource AccentBlue}" FontWeight="SemiBold"/>
+                <TextBlock Grid.Column="5" Text="{Binding ActiveConnectionName}"
+                           Margin="16,0,4,0" VerticalAlignment="Center" FontSize="11"
+                           IsVisible="{Binding IsConnected}" Foreground="{DynamicResource SuccessGreen}" FontWeight="SemiBold"/>
+            </Grid>
+        </Border>
+
+        <!-- ── Main Content ──────────────────────────────────────── -->
+        <Grid ColumnDefinitions="260,Auto,*">
             <!-- Object Explorer -->
-            <Border Grid.Column="0" Padding="4">
+            <Border Grid.Column="0" Background="{DynamicResource ExplorerBg}"
+                    BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="0,0,1,0">
                 <DockPanel>
-                    <TextBlock DockPanel.Dock="Top" Text="Object Explorer" FontWeight="Bold"
-                               FontSize="14" Margin="4,4,4,8" />
+                    <Border DockPanel.Dock="Top" Padding="12,7" Background="{DynamicResource SurfaceBg}"
+                            BorderBrush="{DynamicResource BorderSubtle}" BorderThickness="0,0,0,1">
+                        <TextBlock Text="EXPLORER" FontWeight="SemiBold" FontSize="10"
+                                   Foreground="{DynamicResource TextMuted}" LetterSpacing="1.5"/>
+                    </Border>
                     <TreeView ItemsSource="{Binding ObjectExplorerNodes}"
-                              x:Name="ObjectExplorerTree">
+                              x:Name="ObjectExplorerTree" Margin="2,4,0,0"
+                              Background="Transparent">
                         <TreeView.ItemTemplate>
                             <TreeDataTemplate ItemsSource="{Binding Children}">
-                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                <StackPanel Orientation="Horizontal" Spacing="5" Margin="0,1">
+                                    <!-- Icon -->
                                     <TextBlock Text="{Binding ObjectType, Converter={x:Static vm:ObjectTypeToIconConverter.Instance}}"
                                                FontFamily="Segoe UI Symbol, Apple Symbols, sans-serif"
-                                               FontSize="14" VerticalAlignment="Center" />
-                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" />
+                                               FontSize="12" VerticalAlignment="Center" Opacity="0.6"/>
+
+                                    <!-- Name: bold for groups, normal otherwise -->
+                                    <TextBlock Text="{Binding Name}" VerticalAlignment="Center" FontSize="12">
+                                        <TextBlock.FontWeight>
+                                            <Binding Path="IsGroupNode" Converter="{x:Static vm:BoolToFontWeightConverter.Instance}"/>
+                                        </TextBlock.FontWeight>
+                                    </TextBlock>
+
+                                    <!-- Environment badge -->
+                                    <Border IsVisible="{Binding HasEnvironmentLabel}"
+                                            Classes="envBadge"
+                                            Background="{Binding EnvironmentLabel, Converter={x:Static vm:EnvironmentLabelToBgConverter.Instance}}">
+                                        <TextBlock Text="{Binding EnvironmentLabel}" FontSize="10" FontWeight="SemiBold"
+                                                   Foreground="{Binding EnvironmentLabel, Converter={x:Static vm:EnvironmentLabelToColorConverter.Instance}}"/>
+                                    </Border>
+
+                                    <!-- Loading spinner -->
                                     <ProgressBar IsVisible="{Binding IsLoading}"
-                                                 IsIndeterminate="True" Width="60" Height="4" Margin="4,0,0,0" />
+                                                 IsIndeterminate="True" Width="40" Height="2" Margin="4,0,0,0" />
                                 </StackPanel>
                             </TreeDataTemplate>
                         </TreeView.ItemTemplate>
@@ -114,20 +155,22 @@
             </Border>
 
             <!-- Splitter -->
-            <GridSplitter Grid.Column="1" Width="4" ResizeDirection="Columns" />
+            <GridSplitter Grid.Column="1" Width="2" ResizeDirection="Columns"
+                          Background="{DynamicResource BorderSubtle}"/>
 
             <!-- Query Area -->
-            <Grid Grid.Column="2" RowDefinitions="*">
+            <Grid Grid.Column="2" RowDefinitions="*" Background="{DynamicResource AppBg}">
                 <TabControl ItemsSource="{Binding QueryTabs}"
                             SelectedItem="{Binding SelectedTab}"
                             Padding="0">
                     <TabControl.ItemTemplate>
                         <DataTemplate x:DataType="vm:QueryTabViewModel">
-                            <StackPanel Orientation="Horizontal" Spacing="4">
-                                <TextBlock Text="{Binding Title}" />
-                                <Button Content="x" FontSize="10" Padding="2"
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <TextBlock Text="{Binding Title}" FontSize="12"/>
+                                <Button Content="&#x2715;" FontSize="9" Padding="3,1"
                                         Command="{Binding $parent[Window].((vm:MainWindowViewModel)DataContext).CloseTabCommand}"
-                                        Classes="transparent" />
+                                        Background="Transparent" BorderThickness="0" Opacity="0.4"
+                                        CornerRadius="3"/>
                             </StackPanel>
                         </DataTemplate>
                     </TabControl.ItemTemplate>
@@ -135,19 +178,24 @@
                         <DataTemplate x:DataType="vm:QueryTabViewModel">
                             <Grid RowDefinitions="*,Auto,*">
                                 <!-- SQL Editor -->
-                                <Border Grid.Row="0" Margin="4" BorderBrush="{DynamicResource SystemBaseMediumLowColor}" BorderThickness="1" CornerRadius="4">
+                                <Border Grid.Row="0" Margin="4" BorderBrush="{DynamicResource BorderSubtle}"
+                                        BorderThickness="1" CornerRadius="6" Background="{DynamicResource EditorBg}">
                                     <TextBox Text="{Binding SqlText}"
                                              AcceptsReturn="True"
                                              AcceptsTab="True"
                                              TextWrapping="NoWrap"
                                              FontFamily="Cascadia Code, JetBrains Mono, Consolas, monospace"
                                              FontSize="14"
-                                             Watermark="Enter SQL query here... (F5 to execute)"
-                                             MinHeight="150" />
+                                             Watermark="SELECT * FROM ...  (F5 to execute)"
+                                             MinHeight="150"
+                                             Background="Transparent"
+                                             BorderThickness="0"
+                                             Padding="12,8"
+                                             Foreground="{DynamicResource TextPrimary}"/>
                                 </Border>
 
-                                <!-- Horizontal Splitter -->
-                                <GridSplitter Grid.Row="1" Height="4" ResizeDirection="Rows" />
+                                <GridSplitter Grid.Row="1" Height="2" ResizeDirection="Rows"
+                                              Background="{DynamicResource BorderSubtle}"/>
 
                                 <!-- Results Area -->
                                 <Border Grid.Row="2" Margin="4">
@@ -160,7 +208,7 @@
                                                       CanUserSortColumns="True"
                                                       GridLinesVisibility="All"
                                                       BorderThickness="1"
-                                                      BorderBrush="{DynamicResource SystemBaseMediumLowColor}"
+                                                      BorderBrush="{DynamicResource BorderSubtle}"
                                                       FontFamily="Cascadia Code, JetBrains Mono, Consolas, monospace"
                                                       FontSize="12"
                                                       AutoGenerateColumns="True"
@@ -173,7 +221,10 @@
                                                      TextWrapping="Wrap"
                                                      FontFamily="Cascadia Code, JetBrains Mono, Consolas, monospace"
                                                      FontSize="13"
-                                                     Foreground="{DynamicResource SystemBaseHighColor}" />
+                                                     Background="Transparent"
+                                                     BorderThickness="0"
+                                                     Padding="12,8"
+                                                     Foreground="{DynamicResource TextPrimary}"/>
                                         </TabItem>
                                     </TabControl>
                                 </Border>
@@ -185,22 +236,18 @@
                 <!-- Placeholder when no tabs -->
                 <Border IsVisible="{Binding !QueryTabs.Count}"
                         HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <StackPanel Spacing="12" HorizontalAlignment="Center">
-                        <Viewbox Width="80" Height="80" Opacity="0.3">
-                            <Canvas Width="64" Height="64">
-                                <Ellipse Canvas.Left="8" Canvas.Top="8" Width="48" Height="16" Fill="{DynamicResource SystemBaseHighColor}" />
-                                <Rectangle Canvas.Left="8" Canvas.Top="16" Width="48" Height="32" Fill="{DynamicResource SystemBaseHighColor}" />
-                                <Ellipse Canvas.Left="8" Canvas.Top="40" Width="48" Height="16" Fill="{DynamicResource SystemBaseMediumColor}" />
-                                <Ellipse Canvas.Left="36" Canvas.Top="34" Width="18" Height="18" Stroke="{DynamicResource SystemBaseHighColor}" StrokeThickness="2.5" Fill="Transparent" />
-                                <Line StartPoint="51,49" EndPoint="58,56" Stroke="{DynamicResource SystemBaseHighColor}" StrokeThickness="2.5" StrokeLineCap="Round" />
-                            </Canvas>
-                        </Viewbox>
-                        <TextBlock Text="SQL Explorer" FontSize="24" FontWeight="Light"
-                                   HorizontalAlignment="Center" Opacity="0.5" />
-                        <TextBlock Text="Connect to a server and open a new query tab to get started."
-                                   FontSize="14" HorizontalAlignment="Center" Opacity="0.4" />
-                        <TextBlock Text="Ctrl+N to connect  |  Ctrl+T for new query  |  F5 to execute"
-                                   FontSize="12" HorizontalAlignment="Center" Opacity="0.3" />
+                    <StackPanel Spacing="16" HorizontalAlignment="Center">
+                        <Image Source="/Assets/logo.png" Width="56" Height="56" Opacity="0.2"
+                               HorizontalAlignment="Center"/>
+                        <TextBlock Text="SQL Explorer" FontSize="26" FontWeight="Light"
+                                   HorizontalAlignment="Center" Foreground="{DynamicResource TextMuted}" />
+                        <TextBlock Text="Connect to a server and open a new query tab."
+                                   FontSize="13" HorizontalAlignment="Center" Foreground="{DynamicResource TextMuted}" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Spacing="20" Margin="0,8,0,0">
+                            <TextBlock Text="Ctrl+N connect" FontSize="11" Foreground="{DynamicResource TextMuted}"/>
+                            <TextBlock Text="Ctrl+T new query" FontSize="11" Foreground="{DynamicResource TextMuted}"/>
+                            <TextBlock Text="F5 execute" FontSize="11" Foreground="{DynamicResource TextMuted}"/>
+                        </StackPanel>
                     </StackPanel>
                 </Border>
             </Grid>

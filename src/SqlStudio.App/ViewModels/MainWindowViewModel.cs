@@ -11,6 +11,7 @@ namespace SqlStudio.App.ViewModels;
 public partial class MainWindowViewModel : ViewModelBase
 {
     private readonly IConnectionManager _connectionManager;
+    private readonly IConnectionStore _connectionStore;
     private readonly IObjectExplorerService _objectExplorerService;
     private readonly IQueryExecutionService _queryExecutionService;
     private readonly IScriptGenerationService _scriptService;
@@ -26,17 +27,20 @@ public partial class MainWindowViewModel : ViewModelBase
     [ObservableProperty] private bool _isConnected;
     [ObservableProperty] private Guid _activeConnectionId;
     [ObservableProperty] private string _activeConnectionName = string.Empty;
+    [ObservableProperty] private int _activeConnectionCount;
+
+    private readonly HashSet<Guid> _activeConnectionIds = new();
 
     public ObservableCollection<ObjectExplorerNodeViewModel> ObjectExplorerNodes { get; } = new();
     public ObservableCollection<QueryTabViewModel> QueryTabs { get; } = new();
 
-    // Event for requesting connection dialog from view
     public event EventHandler? ConnectRequested;
     public event Func<Task<(bool Result, string FilePath)>>? SaveFileRequested;
     public event Func<Task<(bool Result, string FilePath)>>? OpenFileRequested;
 
     public MainWindowViewModel(
         IConnectionManager connectionManager,
+        IConnectionStore connectionStore,
         IObjectExplorerService objectExplorerService,
         IQueryExecutionService queryExecutionService,
         IScriptGenerationService scriptService,
@@ -44,6 +48,7 @@ public partial class MainWindowViewModel : ViewModelBase
         ISettingsService settingsService)
     {
         _connectionManager = connectionManager;
+        _connectionStore = connectionStore;
         _objectExplorerService = objectExplorerService;
         _queryExecutionService = queryExecutionService;
         _scriptService = scriptService;
@@ -60,7 +65,7 @@ public partial class MainWindowViewModel : ViewModelBase
         ConnectRequested?.Invoke(this, EventArgs.Empty);
     }
 
-    public void OnConnected(Guid connectionId, ConnectionInfo connectionInfo)
+    public void OnConnected(Guid connectionId, ConnectionInfo connectionInfo, SavedConnection? saved = null)
     {
         ActiveConnectionId = connectionId;
         ActiveConnectionName = connectionInfo.Name;
@@ -68,18 +73,72 @@ public partial class MainWindowViewModel : ViewModelBase
         ConnectionStatus = $"Connected: {connectionInfo.Server}";
         CurrentDatabase = connectionInfo.Database;
         StatusBarText = $"Connected to {connectionInfo.Server}";
+        _activeConnectionIds.Add(connectionId);
+        ActiveConnectionCount = _activeConnectionIds.Count;
 
-        // Add server node to Object Explorer
+        // Build display name
+        var displayName = string.IsNullOrEmpty(connectionInfo.Database) || connectionInfo.Database == "master"
+            ? connectionInfo.Server
+            : $"{connectionInfo.Database}  —  {connectionInfo.Server}";
+
         var serverNode = new ObjectExplorerNodeViewModel(
             new DatabaseObject
             {
-                Name = connectionInfo.Server,
+                Name = displayName,
                 ConnectionId = connectionId,
                 ObjectType = DatabaseObjectType.Server,
                 IsExpandable = true
-            }, _objectExplorerService, _scriptService);
+            }, _objectExplorerService, _scriptService,
+            environmentLabel: saved?.EnvironmentLabel);
 
+        // If the saved connection belongs to a group, nest under group node
+        if (saved?.GroupId != null)
+        {
+            var groupNode = FindOrCreateGroupNode(saved.GroupId.Value);
+            if (groupNode != null)
+            {
+                groupNode.Children.Add(serverNode);
+                groupNode.IsExpanded = true;
+                return;
+            }
+        }
+
+        // No group — add at root
         ObjectExplorerNodes.Add(serverNode);
+    }
+
+    private ObjectExplorerNodeViewModel? FindOrCreateGroupNode(Guid groupId)
+    {
+        // Find existing group node
+        foreach (var node in ObjectExplorerNodes)
+        {
+            if (node.IsGroupNode && node.Model.ConnectionId == groupId)
+                return node;
+        }
+
+        // Create group node — look up name from store
+        var groups = _connectionStore.GetGroupsAsync().GetAwaiter().GetResult();
+        var group = groups.FirstOrDefault(g => g.Id == groupId);
+        if (group == null) return null;
+
+        var groupNode = new ObjectExplorerNodeViewModel(
+            new DatabaseObject
+            {
+                Name = group.Name,
+                ConnectionId = groupId, // reuse field for group ID
+                ObjectType = DatabaseObjectType.ConnectionGroup,
+                IsExpandable = true,
+                IsLoaded = true // children managed here, not lazy-loaded
+            });
+        groupNode.IsExpanded = true;
+
+        // Insert groups at the top
+        var insertIdx = 0;
+        while (insertIdx < ObjectExplorerNodes.Count && ObjectExplorerNodes[insertIdx].IsGroupNode)
+            insertIdx++;
+        ObjectExplorerNodes.Insert(insertIdx, groupNode);
+
+        return groupNode;
     }
 
     [RelayCommand]
@@ -88,12 +147,64 @@ public partial class MainWindowViewModel : ViewModelBase
         if (ActiveConnectionId == Guid.Empty) return;
 
         await _connectionManager.DisconnectAsync(ActiveConnectionId);
-        ObjectExplorerNodes.Clear();
-        IsConnected = false;
-        ConnectionStatus = "Disconnected";
-        CurrentDatabase = "";
-        ActiveConnectionName = string.Empty;
-        StatusBarText = "Disconnected";
+        _activeConnectionIds.Remove(ActiveConnectionId);
+        ActiveConnectionCount = _activeConnectionIds.Count;
+
+        // Remove the specific server node (may be nested in a group)
+        RemoveServerNode(ActiveConnectionId);
+
+        if (_activeConnectionIds.Count == 0)
+        {
+            IsConnected = false;
+            ConnectionStatus = "Disconnected";
+            CurrentDatabase = "";
+            ActiveConnectionName = string.Empty;
+            ActiveConnectionId = Guid.Empty;
+            StatusBarText = "Disconnected";
+            // Clean up empty groups
+            CleanupEmptyGroups();
+        }
+        else
+        {
+            // Switch to another active connection
+            ActiveConnectionId = _activeConnectionIds.First();
+            var conn = _connectionManager.ActiveConnections[ActiveConnectionId];
+            ActiveConnectionName = conn.Name;
+            ConnectionStatus = $"Connected: {conn.Server}";
+            CurrentDatabase = conn.Database;
+            StatusBarText = $"Connected ({_activeConnectionIds.Count} active)";
+        }
+    }
+
+    private void RemoveServerNode(Guid connectionId)
+    {
+        // Check root level
+        var rootNode = ObjectExplorerNodes.FirstOrDefault(n =>
+            n.ObjectType == DatabaseObjectType.Server && n.Model.ConnectionId == connectionId);
+        if (rootNode != null)
+        {
+            ObjectExplorerNodes.Remove(rootNode);
+            return;
+        }
+
+        // Check inside groups
+        foreach (var group in ObjectExplorerNodes.Where(n => n.IsGroupNode))
+        {
+            var child = group.Children.FirstOrDefault(n =>
+                n.ObjectType == DatabaseObjectType.Server && n.Model.ConnectionId == connectionId);
+            if (child != null)
+            {
+                group.Children.Remove(child);
+                return;
+            }
+        }
+    }
+
+    private void CleanupEmptyGroups()
+    {
+        var emptyGroups = ObjectExplorerNodes.Where(n => n.IsGroupNode && n.Children.Count == 0).ToList();
+        foreach (var g in emptyGroups)
+            ObjectExplorerNodes.Remove(g);
     }
 
     [RelayCommand]
@@ -185,10 +296,15 @@ public partial class MainWindowViewModel : ViewModelBase
 
     private void OnConnectionClosed(object? sender, Guid connectionId)
     {
+        _activeConnectionIds.Remove(connectionId);
+        ActiveConnectionCount = _activeConnectionIds.Count;
         if (connectionId == ActiveConnectionId)
         {
-            IsConnected = false;
-            ConnectionStatus = "Disconnected";
+            if (_activeConnectionIds.Count == 0)
+            {
+                IsConnected = false;
+                ConnectionStatus = "Disconnected";
+            }
         }
     }
 }

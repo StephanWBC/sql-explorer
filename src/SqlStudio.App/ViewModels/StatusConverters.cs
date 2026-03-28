@@ -43,3 +43,19 @@ public class BoolToSignInTextConverter : IValueConverter
         value is true ? "Opening browser..." : "Sign in with Microsoft";
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
 }
+
+public class BoolToConnectionDotConverter : IValueConverter
+{
+    public static readonly BoolToConnectionDotConverter Instance = new();
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is true ? Color.Parse("#3FB950") : Color.Parse("#484F58");
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
+}
+
+public class BoolToFontWeightConverter : IValueConverter
+{
+    public static readonly BoolToFontWeightConverter Instance = new();
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is true ? Avalonia.Media.FontWeight.Bold : Avalonia.Media.FontWeight.Normal;
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
+}

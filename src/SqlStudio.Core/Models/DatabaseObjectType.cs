@@ -15,5 +15,6 @@ public enum DatabaseObjectType
     Index,
     ForeignKey,
     PrimaryKey,
-    Trigger
+    Trigger,
+    ConnectionGroup
 }
