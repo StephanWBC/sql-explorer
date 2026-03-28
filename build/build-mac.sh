@@ -62,6 +62,19 @@ for SYBDB in "${SYBDB_PATHS[@]}"; do
     fi
 done
 
+# Copy ODBC dylibs for MS ODBC Driver support
+for ODBCLIB in /opt/homebrew/lib/libodbc.2.dylib /opt/homebrew/lib/libodbcinst.2.dylib; do
+    if [ -f "$ODBCLIB" ]; then
+        LIBNAME=$(basename "$ODBCLIB")
+        cp "$ODBCLIB" "$APP_DIR/Contents/Frameworks/"
+        LINKED=$(otool -L "$APP_DIR/Contents/MacOS/SQLExplorer" | grep "$LIBNAME" | awk '{print $1}' || true)
+        if [ -n "$LINKED" ]; then
+            install_name_tool -change "$LINKED" "@executable_path/../Frameworks/$LIBNAME" "$APP_DIR/Contents/MacOS/SQLExplorer" 2>/dev/null || true
+        fi
+    fi
+done
+echo "Bundled ODBC libraries."
+
 # Generate .icns icon from logo PNGs
 ICONSET="$APP_DIR/Contents/Resources/AppIcon.iconset"
 mkdir -p "$ICONSET"

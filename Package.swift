@@ -17,6 +17,12 @@ let package = Package(
             path: "Sources/CFreeTDS",
             providers: [.brew(["freetds"])]
         ),
+        // System library: unixODBC (for MS ODBC Driver — Azure AD token auth)
+        .systemLibrary(
+            name: "CODBC",
+            path: "Sources/CODBC",
+            providers: [.brew(["unixodbc"])]
+        ),
         // C shim: exposes FreeTDS macros as functions callable from Swift
         .target(
             name: "CFreeTDSShim",
@@ -36,6 +42,7 @@ let package = Package(
             dependencies: [
                 "CFreeTDS",
                 "CFreeTDSShim",
+                "CODBC",
                 .product(name: "MSAL", package: "microsoft-authentication-library-for-objc"),
             ],
             path: "SQLExplorer",
@@ -45,6 +52,7 @@ let package = Package(
             linkerSettings: [
                 .unsafeFlags(["-L/opt/homebrew/lib"]),
                 .linkedLibrary("sybdb"),
+                .linkedLibrary("odbc"),
             ]
         ),
         .testTarget(

@@ -1,0 +1,6 @@
+module CODBC [system] {
+    header "/opt/homebrew/include/sql.h"
+    header "/opt/homebrew/include/sqlext.h"
+    link "odbc"
+    export *
+}
