@@ -3,6 +3,8 @@ set -euo pipefail
 
 echo "=== Building SQL Explorer for macOS ==="
 
+VERSION="${1:-1.0.0}"
+
 # Build release binary
 swift build -c release
 
@@ -18,21 +20,49 @@ APP_DIR="publish/SQL Explorer.app"
 rm -rf publish
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
+mkdir -p "$APP_DIR/Contents/Frameworks"
 
 # Copy binary
 cp "$BINARY" "$APP_DIR/Contents/MacOS/SQLExplorer"
 
-# Copy MSAL framework if present
-MSAL_FRAMEWORK=".build/release/MSAL.framework"
-if [ -d "$MSAL_FRAMEWORK" ]; then
-    mkdir -p "$APP_DIR/Contents/Frameworks"
-    cp -R "$MSAL_FRAMEWORK" "$APP_DIR/Contents/Frameworks/"
-    # Sign the framework first
-    codesign --deep --force --sign - "$APP_DIR/Contents/Frameworks/MSAL.framework" 2>/dev/null || true
+# Copy MSAL framework — the binary links to @rpath/MSAL.framework
+MSAL_FW=".build/arm64-apple-macosx/release/MSAL.framework"
+if [ ! -d "$MSAL_FW" ]; then
+    # Fallback: look in artifacts
+    MSAL_FW=$(find .build/artifacts -name "MSAL.framework" -path "*/macos-*" | head -1)
 fi
 
+if [ -d "$MSAL_FW" ]; then
+    echo "Copying MSAL.framework from $MSAL_FW"
+    cp -R "$MSAL_FW" "$APP_DIR/Contents/Frameworks/"
+
+    # Fix rpath: the binary looks for @rpath/MSAL.framework
+    # Add the Frameworks directory to rpath
+    install_name_tool -add_rpath @executable_path/../Frameworks "$APP_DIR/Contents/MacOS/SQLExplorer" 2>/dev/null || true
+
+    # Sign the framework
+    codesign --deep --force --sign - "$APP_DIR/Contents/Frameworks/MSAL.framework" 2>/dev/null || true
+else
+    echo "WARNING: MSAL.framework not found!"
+fi
+
+# Copy FreeTDS dylib and fix load path
+SYBDB_PATHS=("/opt/homebrew/lib/libsybdb.5.dylib" "/opt/homebrew/opt/freetds/lib/libsybdb.5.dylib")
+for SYBDB in "${SYBDB_PATHS[@]}"; do
+    if [ -f "$SYBDB" ]; then
+        cp "$SYBDB" "$APP_DIR/Contents/Frameworks/"
+        # Get the actual path the binary references
+        LINKED_PATH=$(otool -L "$APP_DIR/Contents/MacOS/SQLExplorer" | grep sybdb | awk '{print $1}')
+        if [ -n "$LINKED_PATH" ]; then
+            install_name_tool -change "$LINKED_PATH" @executable_path/../Frameworks/libsybdb.5.dylib "$APP_DIR/Contents/MacOS/SQLExplorer" 2>/dev/null || true
+        fi
+        codesign --force --sign - "$APP_DIR/Contents/Frameworks/libsybdb.5.dylib" 2>/dev/null || true
+        echo "Bundled FreeTDS from $SYBDB"
+        break
+    fi
+done
+
 # Create Info.plist
-VERSION="${1:-1.0.0}"
 cat > "$APP_DIR/Contents/Info.plist" << PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -66,7 +96,7 @@ cat > "$APP_DIR/Contents/Info.plist" << PLIST
 </plist>
 PLIST
 
-# Ad-hoc code sign (ignore warnings)
+# Ad-hoc code sign the whole bundle
 codesign --deep --force --sign - "$APP_DIR" 2>/dev/null || true
 echo "Code signed."
 
