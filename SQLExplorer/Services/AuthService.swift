@@ -49,17 +49,43 @@ class AuthService: ObservableObject {
         guard let data = try? Data(contentsOf: Self.cacheFile) else { return }
         print("[Auth] Restoring MSAL cache from file (\(data.count) bytes)")
 
-        // Write the cache blob to Keychain where MSAL will find it
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: Self.msalKeychainService,
             kSecAttrAccount as String: Self.msalKeychainAccount,
         ]
+
+        // Try update first (if entry exists from same or different app version)
+        let updateStatus = SecItemUpdate(
+            query as CFDictionary,
+            [kSecValueData as String: data] as CFDictionary
+        )
+
+        if updateStatus == errSecSuccess {
+            print("[Auth] Keychain update succeeded")
+            return
+        }
+
+        // If update failed (item not found), delete everything matching and re-add
         SecItemDelete(query as CFDictionary)
+
         var addQuery = query
         addQuery[kSecValueData as String] = data
-        let status = SecItemAdd(addQuery as CFDictionary, nil)
-        print("[Auth] Keychain restore status: \(status) (0=success)")
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        print("[Auth] Keychain add status: \(addStatus) (0=success, -25299=duplicate)")
+
+        // If still duplicate, try updating without matching account
+        if addStatus == -25299 {
+            let broadQuery: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: Self.msalKeychainService,
+            ]
+            let broadUpdate = SecItemUpdate(
+                broadQuery as CFDictionary,
+                [kSecValueData as String: data, kSecAttrAccount as String: Self.msalKeychainAccount] as CFDictionary
+            )
+            print("[Auth] Broad update status: \(broadUpdate)")
+        }
     }
 
     /// Save MSAL's Keychain cache to our file backup
