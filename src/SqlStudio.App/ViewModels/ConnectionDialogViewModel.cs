@@ -120,9 +120,14 @@ public partial class ConnectionDialogViewModel : ViewModelBase
     {
         _connectionManager = connectionManager;
         _connectionStore = connectionStore;
-        _ = LoadSavedConnectionsAsync();
-        _ = LoadGroupsAsync();
-        _ = RestoreEntraCredentialAsync();
+        _ = SafeInitAsync();
+    }
+
+    private async Task SafeInitAsync()
+    {
+        try { await LoadSavedConnectionsAsync(); } catch { }
+        try { await LoadGroupsAsync(); } catch { }
+        try { await RestoreEntraCredentialAsync(); } catch { }
     }
 
     private async Task LoadGroupsAsync()
@@ -258,7 +263,7 @@ public partial class ConnectionDialogViewModel : ViewModelBase
         StatusMessage = $"Loading databases for {value.Name}...";
         IsStatusError = false;
 
-        _ = LoadDatabasesForSubscriptionAsync(value);
+        _ = Task.Run(async () => { try { await LoadDatabasesForSubscriptionAsync(value); } catch { } });
     }
 
     partial void OnSelectedSavedConnectionChanged(SavedConnection? value)
@@ -297,19 +302,29 @@ public partial class ConnectionDialogViewModel : ViewModelBase
             var app = await GetOrCreateMsalAppAsync();
             AuthenticationResult armResult;
 
+            // Try silent first for ARM scope
             try
             {
                 var accounts = await app.GetAccountsAsync();
-                armResult = await app.AcquireTokenSilent(ArmScopes, accounts.FirstOrDefault())
-                    .ExecuteAsync();
+                var account = accounts.FirstOrDefault();
+                if (account != null)
+                {
+                    armResult = await app.AcquireTokenSilent(ArmScopes, account).ExecuteAsync();
+                }
+                else
+                {
+                    throw new MsalUiRequiredException("no_account", "No cached account");
+                }
             }
             catch (MsalUiRequiredException)
             {
+                // Single interactive sign-in — only ONE browser prompt
                 armResult = await app.AcquireTokenInteractive(ArmScopes)
                     .WithSystemWebViewOptions(new SystemWebViewOptions
                     {
                         OpenBrowserAsync = OpenBrowserInIncognito
                     })
+                    .WithExtraScopesToConsent(SqlScopes) // pre-consent SQL scope too
                     .ExecuteAsync();
             }
 
@@ -317,14 +332,14 @@ public partial class ConnectionDialogViewModel : ViewModelBase
             _armAccessToken = armResult.AccessToken;
             EntraUserEmail = armResult.Account?.Username ?? "Signed in";
 
-            // Get SQL token silently (same session)
+            // Get SQL token silently — should work now since we pre-consented
             StatusMessage = "Acquiring database credentials...";
             try
             {
                 var sqlResult = await app.AcquireTokenSilent(SqlScopes, _msalAccount).ExecuteAsync();
                 _entraToken = new AccessToken(sqlResult.AccessToken, sqlResult.ExpiresOn);
             }
-            catch { }
+            catch { /* SQL token will be acquired at connect time if needed */ }
 
             IsEntraSignedIn = true;
             IsStatusError = false;

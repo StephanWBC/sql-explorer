@@ -22,6 +22,17 @@ public partial class App : Application
 
     public override void OnFrameworkInitializationCompleted()
     {
+        // Global exception handlers — prevent crashes from unhandled exceptions
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            Console.Error.WriteLine($"[FATAL] Unhandled: {args.ExceptionObject}");
+        };
+        TaskScheduler.UnobservedTaskException += (_, args) =>
+        {
+            Console.Error.WriteLine($"[WARN] Unobserved task: {args.Exception?.Message}");
+            args.SetObserved(); // Prevent crash
+        };
+
         var services = new ServiceCollection();
         ConfigureServices(services);
         Services = services.BuildServiceProvider();

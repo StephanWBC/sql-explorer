@@ -73,7 +73,13 @@ public partial class ConnectionManagerViewModel : ViewModelBase
     public ConnectionManagerViewModel(IConnectionStore connectionStore)
     {
         _connectionStore = connectionStore;
-        _ = LoadAsync();
+        _ = SafeLoadAsync();
+    }
+
+    private async Task SafeLoadAsync()
+    {
+        try { await LoadAsync(); }
+        catch (Exception ex) { StatusMessage = $"Load error: {ex.Message}"; }
     }
 
     private async Task LoadAsync()
