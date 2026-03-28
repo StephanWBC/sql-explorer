@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ConnectionSheet: View {
     @EnvironmentObject var appState: AppState
+    @ObservedObject var authService: AuthService
     @Environment(\.dismiss) var dismiss
 
     @State private var selectedDatabase: AzureDatabase?
@@ -39,8 +40,8 @@ struct ConnectionSheet: View {
                 VStack(alignment: .leading) {
                     Text("Connect to Database")
                         .font(.headline)
-                    if appState.authService.isSignedIn {
-                        Text(appState.authService.userEmail)
+                    if authService.isSignedIn {
+                        Text(authService.userEmail)
                             .font(.caption)
                             .foregroundStyle(.green)
                     } else {
@@ -71,7 +72,7 @@ struct ConnectionSheet: View {
                         TextField("Username", text: $username)
                         SecureField("Password", text: $password)
                     }
-                } else if !appState.authService.isSignedIn {
+                } else if !authService.isSignedIn {
                     // Not signed in — prompt
                     Section {
                         VStack(spacing: 12) {
@@ -93,40 +94,40 @@ struct ConnectionSheet: View {
                     // Signed in — show subscription + database picker
                     Section("Subscription") {
                         Picker("Subscription", selection: Binding(
-                            get: { appState.authService.selectedSubscription },
+                            get: { authService.selectedSubscription },
                             set: { sub in
-                                appState.authService.selectedSubscription = sub
+                                authService.selectedSubscription = sub
                                 if let sub {
                                     Task {
-                                        await appState.authService.discoverDatabases(
+                                        await authService.discoverDatabases(
                                             subscriptionId: sub.id, subscriptionName: sub.name)
                                     }
                                 }
                             }
                         )) {
-                            ForEach(appState.authService.subscriptions) { sub in
+                            ForEach(authService.subscriptions) { sub in
                                 Text(sub.name).tag(sub as AzureSubscription?)
                             }
                         }
 
-                        if appState.authService.isLoadingSubscriptions {
+                        if authService.isLoadingSubscriptions {
                             ProgressView("Loading subscriptions...")
                                 .font(.caption)
                         }
                     }
 
                     Section("Database") {
-                        if appState.authService.isLoadingDatabases {
+                        if authService.isLoadingDatabases {
                             ProgressView("Discovering databases...")
                                 .font(.caption)
-                        } else if appState.authService.databases.isEmpty {
+                        } else if authService.databases.isEmpty {
                             Text("No databases found in this subscription")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         } else {
                             Picker("Database", selection: $selectedDatabase) {
                                 Text("Select a database").tag(nil as AzureDatabase?)
-                                ForEach(appState.authService.databases) { db in
+                                ForEach(authService.databases) { db in
                                     VStack(alignment: .leading) {
                                         Text(db.databaseName)
                                         Text(db.serverFqdn)
@@ -221,7 +222,7 @@ struct ConnectionSheet: View {
                         Task { await connect() }
                     }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(isConnecting || (!manualMode && selectedDatabase == nil && appState.authService.isSignedIn))
+                    .disabled(isConnecting || (!manualMode && selectedDatabase == nil && authService.isSignedIn))
                 }
                 .padding()
             }
@@ -248,8 +249,8 @@ struct ConnectionSheet: View {
             serverName = db.serverFqdn
             dbName = db.databaseName
             // For Entra ID, get a SQL access token and pass as password
-            if let sqlToken = await appState.authService.getSQLToken() {
-                connUsername = appState.authService.userEmail
+            if let sqlToken = await authService.getSQLToken() {
+                connUsername = authService.userEmail
                 connPassword = sqlToken
             } else {
                 statusMessage = "Failed to get SQL access token"

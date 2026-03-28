@@ -10,9 +10,8 @@ struct MainView: View {
         HSplitView {
             // Left: Object Explorer
             VStack(spacing: 0) {
-                // Account banner — always visible
-                AccountBannerView()
-                    .environmentObject(appState)
+                // Account banner — always visible, observes authService directly
+                AccountBannerView(authService: appState.authService)
 
                 Divider()
 
@@ -137,7 +136,7 @@ struct MainView: View {
             }
         }
         .sheet(isPresented: $showingConnectionSheet) {
-            ConnectionSheet()
+            ConnectionSheet(authService: appState.authService)
                 .environmentObject(appState)
         }
         .sheet(isPresented: $showingConnectionManager) {

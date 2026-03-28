@@ -44,30 +44,43 @@ class AuthService: ObservableObject {
 
     /// Restore session from Keychain — runs on app launch
     func tryRestoreSession() async {
-        guard let app = application else { return }
+        guard let app = application else {
+            print("[Auth] No MSAL app for restore")
+            return
+        }
 
         do {
             let accounts = try app.allAccounts()
-            guard let account = accounts.first else { return }
+            print("[Auth] Restore: found \(accounts.count) cached account(s)")
+            guard let account = accounts.first else {
+                print("[Auth] No cached accounts — user must sign in")
+                return
+            }
 
             self.account = account
+            print("[Auth] Trying silent token for: \(account.username ?? "unknown")")
+
             let silentParams = MSALSilentTokenParameters(scopes: Self.armScopes, account: account)
             let result = try await app.acquireTokenSilent(with: silentParams)
 
             armAccessToken = result.accessToken
             userEmail = account.username ?? "Signed in"
             isSignedIn = true
+            print("[Auth] Silent restore succeeded — isSignedIn = true")
 
-            // Auto-discover subscriptions after silent restore
             await discoverSubscriptions()
         } catch {
+            print("[Auth] Silent restore failed: \(error)")
             isSignedIn = false
         }
     }
 
     /// Interactive sign-in via embedded WKWebView
     func signIn() async {
-        guard let app = application else { return }
+        guard let app = application else {
+            errorMessage = "MSAL not initialized"
+            return
+        }
 
         do {
             let webviewParams = MSALWebviewParameters()
@@ -76,7 +89,9 @@ class AuthService: ObservableObject {
             let params = MSALInteractiveTokenParameters(scopes: Self.armScopes, webviewParameters: webviewParams)
             params.promptType = .selectAccount
 
+            print("[Auth] Starting interactive sign-in...")
             let result = try await app.acquireToken(with: params)
+            print("[Auth] Sign-in succeeded: \(result.account.username ?? "unknown")")
 
             account = result.account
             armAccessToken = result.accessToken
@@ -84,9 +99,12 @@ class AuthService: ObservableObject {
             isSignedIn = true
             errorMessage = nil
 
+            print("[Auth] isSignedIn = \(isSignedIn), email = \(userEmail)")
+
             // Discover subscriptions after sign-in
             await discoverSubscriptions()
         } catch {
+            print("[Auth] Sign-in failed: \(error)")
             errorMessage = "Sign-in failed: \(error.localizedDescription)"
             isSignedIn = false
         }
@@ -120,8 +138,12 @@ class AuthService: ObservableObject {
 
     /// Discover all subscriptions for the signed-in user
     func discoverSubscriptions() async {
-        guard let token = armAccessToken else { return }
+        guard let token = armAccessToken else {
+            print("[Auth] No ARM token for subscription discovery")
+            return
+        }
 
+        print("[Auth] Discovering subscriptions...")
         isLoadingSubscriptions = true
         defer { isLoadingSubscriptions = false }
 

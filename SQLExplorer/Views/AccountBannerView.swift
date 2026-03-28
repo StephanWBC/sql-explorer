@@ -1,34 +1,35 @@
 import SwiftUI
 
 struct AccountBannerView: View {
-    @EnvironmentObject var appState: AppState
+    // Observe authService DIRECTLY — nested ObservableObject doesn't auto-propagate
+    @ObservedObject var authService: AuthService
 
     var body: some View {
         VStack(spacing: 0) {
-            if appState.authService.isSignedIn {
+            if authService.isSignedIn {
                 // Signed in state
                 HStack(spacing: 8) {
                     Circle()
                         .fill(.green)
                         .frame(width: 8, height: 8)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(appState.authService.userEmail)
+                        Text(authService.userEmail)
                             .font(.system(size: 11, weight: .semibold))
                             .foregroundStyle(.green)
                             .lineLimit(1)
-                        if appState.authService.isLoadingSubscriptions {
+                        if authService.isLoadingSubscriptions {
                             Text("Loading subscriptions...")
                                 .font(.system(size: 9))
                                 .foregroundStyle(.secondary)
                         } else {
-                            Text("\(appState.authService.subscriptions.count) subscription(s)")
+                            Text("\(authService.subscriptions.count) subscription(s)")
                                 .font(.system(size: 9))
                                 .foregroundStyle(.secondary)
                         }
                     }
                     Spacer()
                     Button {
-                        appState.authService.signOut()
+                        authService.signOut()
                     } label: {
                         Image(systemName: "rectangle.portrait.and.arrow.right")
                             .font(.system(size: 11))
@@ -44,7 +45,7 @@ struct AccountBannerView: View {
                 // Not signed in
                 VStack(spacing: 6) {
                     Button {
-                        Task { await appState.authService.signIn() }
+                        Task { await authService.signIn() }
                     } label: {
                         HStack(spacing: 6) {
                             Image(systemName: "person.badge.key")
@@ -57,7 +58,7 @@ struct AccountBannerView: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
 
-                    if let error = appState.authService.errorMessage {
+                    if let error = authService.errorMessage {
                         Text(error)
                             .font(.system(size: 9))
                             .foregroundStyle(.red)
