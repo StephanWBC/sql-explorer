@@ -123,13 +123,29 @@ class AuthService: ObservableObject {
     }
 
     /// Get SQL access token for database connectivity
+    /// Tries silent first, falls back to interactive if consent needed
     func getSQLToken() async -> String? {
         guard let app = application, let account else { return nil }
+
+        // Try silent first
         do {
             let params = MSALSilentTokenParameters(scopes: Self.sqlScopes, account: account)
             let result = try await app.acquireTokenSilent(with: params)
             return result.accessToken
         } catch {
+            print("[Auth] SQL silent token failed, trying interactive: \(error)")
+        }
+
+        // Interactive fallback — SQL scope needs separate consent
+        do {
+            let webviewParams = MSALWebviewParameters()
+            webviewParams.webviewType = .wkWebView
+            let params = MSALInteractiveTokenParameters(scopes: Self.sqlScopes, webviewParameters: webviewParams)
+            let result = try await app.acquireToken(with: params)
+            return result.accessToken
+        } catch {
+            print("[Auth] SQL interactive token also failed: \(error)")
+            errorMessage = "SQL token failed: \(error.localizedDescription)"
             return nil
         }
     }
