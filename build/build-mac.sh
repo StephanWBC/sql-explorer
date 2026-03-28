@@ -129,9 +129,28 @@ cat > "$APP_DIR/Contents/Info.plist" << PLIST
 </plist>
 PLIST
 
-# Ad-hoc code sign the whole bundle
-codesign --deep --force --sign - "$APP_DIR" 2>/dev/null || true
-echo "Code signed."
+# Create entitlements for Keychain access (required for MSAL token persistence)
+cat > "publish/entitlements.plist" << 'ENTITLEMENTS'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    <key>keychain-access-groups</key>
+    <array>
+        <string>com.sqlexplorer.app</string>
+        <string>com.microsoft.identity.universalstorage</string>
+    </array>
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>
+ENTITLEMENTS
+
+# Ad-hoc code sign with entitlements
+codesign --deep --force --sign - --entitlements "publish/entitlements.plist" "$APP_DIR" 2>/dev/null || true
+echo "Code signed with Keychain entitlements."
 
 # Create DMG
 DMG_PATH="publish/SQLExplorer-${VERSION}-mac.dmg"

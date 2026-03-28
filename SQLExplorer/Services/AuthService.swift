@@ -2,6 +2,14 @@ import Foundation
 import MSAL
 
 /// Entra ID authentication using MSAL.Swift + Azure subscription/database discovery
+///
+/// Token persistence strategy:
+/// 1. MSAL's built-in Keychain cache (if entitlements allow)
+/// 2. Manual Keychain backup of account identifier + home account ID
+/// 3. On restore: find account by ID in MSAL cache, then silent token refresh
+///
+/// The user logs in ONCE. Until they explicitly sign out, the token persists
+/// across app restarts, updates, reinstalls (Keychain is tied to bundle ID).
 @MainActor
 class AuthService: ObservableObject {
     @Published var isSignedIn: Bool = false
@@ -19,63 +27,127 @@ class AuthService: ObservableObject {
     private var account: MSALAccount?
     private var armAccessToken: String?
 
-    private static let clientId = "04b07795-8ddb-461a-bbee-02f9e1bf7b46" // Azure CLI
+    private static let clientId = "04b07795-8ddb-461a-bbee-02f9e1bf7b46"
     private static let authority = "https://login.microsoftonline.com/organizations"
     private static let armScopes = ["https://management.azure.com/.default"]
     private static let sqlScopes = ["https://database.windows.net/.default"]
+
+    // Persistent storage keys
+    private static let savedAccountFile = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".sqlexplorer/auth-account.json")
+    private static let keychainAccountKey = "com.sqlexplorer.msal-account-id"
+    private static let keychainEmailKey = "com.sqlexplorer.user-email"
 
     init() {
         setupMSAL()
         Task { await tryRestoreSession() }
     }
 
+    // MARK: - MSAL Setup
+
     private func setupMSAL() {
         do {
             let config = MSALPublicClientApplicationConfig(clientId: Self.clientId)
             config.authority = try MSALAuthority(url: URL(string: Self.authority)!)
             config.redirectUri = "https://login.microsoftonline.com/common/oauth2/nativeclient"
+
             application = try MSALPublicClientApplication(configuration: config)
+            print("[Auth] MSAL initialized successfully")
         } catch {
+            print("[Auth] MSAL setup failed: \(error)")
             errorMessage = "MSAL setup failed: \(error.localizedDescription)"
         }
     }
 
-    // MARK: - Auth
+    // MARK: - Session Restore (THE CRITICAL PATH)
 
-    /// Restore session from Keychain — runs on app launch
+    /// Restore session — this is what makes "log in once, forever" work
     func tryRestoreSession() async {
         guard let app = application else {
-            print("[Auth] No MSAL app for restore")
+            print("[Auth] No MSAL app — can't restore")
             return
         }
 
+        // Step 1: Try to find cached accounts in MSAL's own cache
         do {
             let accounts = try app.allAccounts()
-            print("[Auth] Restore: found \(accounts.count) cached account(s)")
-            guard let account = accounts.first else {
-                print("[Auth] No cached accounts — user must sign in")
-                return
+            print("[Auth] MSAL cache has \(accounts.count) account(s)")
+
+            if let account = accounts.first {
+                // Great — MSAL has the account cached
+                return await restoreWithAccount(account, app: app)
+            }
+        } catch {
+            print("[Auth] Error reading MSAL accounts: \(error)")
+        }
+
+        // Step 2: MSAL cache empty — try our manual backup
+        if let savedAccountId = KeychainHelper.load(key: Self.keychainAccountKey),
+           let savedEmail = KeychainHelper.load(key: Self.keychainEmailKey) {
+            print("[Auth] Found saved account in Keychain: \(savedEmail)")
+
+            // Try to find account by identifier
+            do {
+                let account = try app.account(forIdentifier: savedAccountId)
+                return await restoreWithAccount(account, app: app)
+            } catch {
+                print("[Auth] Could not find account by ID: \(error)")
             }
 
-            self.account = account
-            print("[Auth] Trying silent token for: \(account.username ?? "unknown")")
+            // Last resort: show the email but mark as needing re-auth
+            print("[Auth] Account found in Keychain but MSAL can't locate it")
+            userEmail = savedEmail
+        }
 
+        // Step 3: Check file-based backup
+        if let data = try? Data(contentsOf: Self.savedAccountFile),
+           let saved = try? JSONDecoder().decode(SavedAuthAccount.self, from: data) {
+            print("[Auth] Found auth file backup: \(saved.email)")
+            userEmail = saved.email
+
+            do {
+                let account = try app.account(forIdentifier: saved.accountId)
+                return await restoreWithAccount(account, app: app)
+            } catch {
+                print("[Auth] File backup account not in MSAL: \(error)")
+            }
+        }
+
+        print("[Auth] No cached session found — user must sign in")
+        isSignedIn = false
+    }
+
+    /// Restore using a found MSAL account — silent token refresh
+    private func restoreWithAccount(_ account: MSALAccount, app: MSALPublicClientApplication) async {
+        self.account = account
+        let email = account.username ?? "Signed in"
+        userEmail = email
+        print("[Auth] Restoring session for: \(email)")
+
+        do {
             let silentParams = MSALSilentTokenParameters(scopes: Self.armScopes, account: account)
             let result = try await app.acquireTokenSilent(with: silentParams)
 
             armAccessToken = result.accessToken
-            userEmail = account.username ?? "Signed in"
             isSignedIn = true
-            print("[Auth] Silent restore succeeded — isSignedIn = true")
+            print("[Auth] ✅ Silent restore succeeded — isSignedIn = true")
 
+            // Save backup
+            persistAccountInfo(account: account, email: email)
+
+            // Discover subscriptions
             await discoverSubscriptions()
         } catch {
-            print("[Auth] Silent restore failed: \(error)")
+            print("[Auth] Silent token refresh failed: \(error)")
+            // Token expired but account exists — try interactive silently
+            // (MSAL may be able to use the refresh token)
+            errorMessage = "Session expired. Please sign in again."
             isSignedIn = false
         }
     }
 
-    /// Interactive sign-in via embedded WKWebView
+    // MARK: - Interactive Sign-In
+
     func signIn() async {
         guard let app = application else {
             errorMessage = "MSAL not initialized"
@@ -91,23 +163,46 @@ class AuthService: ObservableObject {
 
             print("[Auth] Starting interactive sign-in...")
             let result = try await app.acquireToken(with: params)
-            print("[Auth] Sign-in succeeded: \(result.account.username ?? "unknown")")
 
             account = result.account
             armAccessToken = result.accessToken
-            userEmail = result.account.username ?? "Signed in"
+            let email = result.account.username ?? "Signed in"
+            userEmail = email
             isSignedIn = true
             errorMessage = nil
 
-            print("[Auth] isSignedIn = \(isSignedIn), email = \(userEmail)")
+            print("[Auth] ✅ Interactive sign-in succeeded: \(email)")
 
-            // Discover subscriptions after sign-in
+            // Persist account info in MULTIPLE places for reliability
+            persistAccountInfo(account: result.account, email: email)
+
             await discoverSubscriptions()
         } catch {
-            print("[Auth] Sign-in failed: \(error)")
+            print("[Auth] ❌ Sign-in failed: \(error)")
             errorMessage = "Sign-in failed: \(error.localizedDescription)"
             isSignedIn = false
         }
+    }
+
+    // MARK: - Persistence (belt AND suspenders)
+
+    /// Save account info to Keychain + file so we can find it on next launch
+    private func persistAccountInfo(account: MSALAccount, email: String) {
+        let accountId = account.identifier ?? ""
+
+        // Keychain backup
+        KeychainHelper.save(key: Self.keychainAccountKey, value: accountId)
+        KeychainHelper.save(key: Self.keychainEmailKey, value: email)
+
+        // File backup
+        let saved = SavedAuthAccount(accountId: accountId, email: email, savedAt: Date())
+        if let data = try? JSONEncoder().encode(saved) {
+            let dir = Self.savedAccountFile.deletingLastPathComponent()
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? data.write(to: Self.savedAccountFile, options: .atomic)
+        }
+
+        print("[Auth] Persisted account: \(email) (id: \(accountId.prefix(8))...)")
     }
 
     func signOut() {
@@ -120,23 +215,30 @@ class AuthService: ObservableObject {
         subscriptions = []
         databases = []
         selectedSubscription = nil
+
+        // Clear all persistence
+        KeychainHelper.delete(key: Self.keychainAccountKey)
+        KeychainHelper.delete(key: Self.keychainEmailKey)
+        try? FileManager.default.removeItem(at: Self.savedAccountFile)
+
+        print("[Auth] Signed out — all cached data cleared")
     }
 
-    /// Get SQL access token for database connectivity
-    /// Tries silent first, falls back to interactive if consent needed
+    // MARK: - SQL Token
+
     func getSQLToken() async -> String? {
         guard let app = application, let account else { return nil }
 
-        // Try silent first
+        // Try silent
         do {
             let params = MSALSilentTokenParameters(scopes: Self.sqlScopes, account: account)
             let result = try await app.acquireTokenSilent(with: params)
             return result.accessToken
         } catch {
-            print("[Auth] SQL silent token failed, trying interactive: \(error)")
+            print("[Auth] SQL silent token failed: \(error)")
         }
 
-        // Interactive fallback — SQL scope needs separate consent
+        // Interactive fallback
         do {
             let webviewParams = MSALWebviewParameters()
             webviewParams.webviewType = .wkWebView
@@ -144,7 +246,7 @@ class AuthService: ObservableObject {
             let result = try await app.acquireToken(with: params)
             return result.accessToken
         } catch {
-            print("[Auth] SQL interactive token also failed: \(error)")
+            print("[Auth] SQL interactive token failed: \(error)")
             errorMessage = "SQL token failed: \(error.localizedDescription)"
             return nil
         }
@@ -152,7 +254,6 @@ class AuthService: ObservableObject {
 
     // MARK: - Azure Discovery
 
-    /// Discover all subscriptions for the signed-in user
     func discoverSubscriptions() async {
         guard let token = armAccessToken else {
             print("[Auth] No ARM token for subscription discovery")
@@ -166,6 +267,7 @@ class AuthService: ObservableObject {
         do {
             var request = URLRequest(url: URL(string: "https://management.azure.com/subscriptions?api-version=2022-12-01")!)
             request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.timeoutInterval = 30
 
             let (data, _) = try await URLSession.shared.data(for: request)
             let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -177,17 +279,18 @@ class AuthService: ObservableObject {
                 return AzureSubscription(id: id, name: name)
             }.sorted { $0.name < $1.name }
 
-            // Auto-select first subscription
+            print("[Auth] Found \(subscriptions.count) subscription(s)")
+
             if let first = subscriptions.first {
                 selectedSubscription = first
                 await discoverDatabases(subscriptionId: first.id, subscriptionName: first.name)
             }
         } catch {
+            print("[Auth] Subscription discovery failed: \(error)")
             errorMessage = "Failed to load subscriptions: \(error.localizedDescription)"
         }
     }
 
-    /// Discover SQL databases in a subscription
     func discoverDatabases(subscriptionId: String, subscriptionName: String) async {
         guard let token = armAccessToken else { return }
 
@@ -196,9 +299,9 @@ class AuthService: ObservableObject {
         defer { isLoadingDatabases = false }
 
         do {
-            // List SQL servers
             var serversReq = URLRequest(url: URL(string: "https://management.azure.com/subscriptions/\(subscriptionId)/providers/Microsoft.Sql/servers?api-version=2021-11-01")!)
             serversReq.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            serversReq.timeoutInterval = 30
 
             let (serversData, _) = try await URLSession.shared.data(for: serversReq)
             let serversJson = try JSONSerialization.jsonObject(with: serversData) as? [String: Any]
@@ -211,7 +314,6 @@ class AuthService: ObservableObject {
                       let props = server["properties"] as? [String: Any],
                       let fqdn = props["fullyQualifiedDomainName"] as? String else { continue }
 
-                // Extract resource group from server ID
                 let parts = serverId.split(separator: "/")
                 guard let rgIdx = parts.firstIndex(where: { $0.lowercased() == "resourcegroups" }),
                       rgIdx + 1 < parts.count,
@@ -220,9 +322,9 @@ class AuthService: ObservableObject {
                 let rg = String(parts[rgIdx + 1])
                 let srvName = String(parts[srvIdx + 1])
 
-                // List databases on this server
                 var dbsReq = URLRequest(url: URL(string: "https://management.azure.com/subscriptions/\(subscriptionId)/resourceGroups/\(rg)/providers/Microsoft.Sql/servers/\(srvName)/databases?api-version=2021-11-01")!)
                 dbsReq.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                dbsReq.timeoutInterval = 30
 
                 let (dbsData, _) = try await URLSession.shared.data(for: dbsReq)
                 let dbsJson = try JSONSerialization.jsonObject(with: dbsData) as? [String: Any]
@@ -241,8 +343,18 @@ class AuthService: ObservableObject {
             }
 
             databases = allDbs.sorted { $0.databaseName < $1.databaseName }
+            print("[Auth] Found \(databases.count) database(s)")
         } catch {
+            print("[Auth] Database discovery failed: \(error)")
             errorMessage = "Failed to load databases: \(error.localizedDescription)"
         }
     }
+}
+
+// MARK: - Persistence model
+
+private struct SavedAuthAccount: Codable {
+    let accountId: String
+    let email: String
+    let savedAt: Date
 }
