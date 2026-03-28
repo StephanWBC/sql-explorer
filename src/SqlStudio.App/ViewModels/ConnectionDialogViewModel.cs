@@ -136,11 +136,19 @@ public partial class ConnectionDialogViewModel : ViewModelBase
     [RelayCommand]
     private async Task CreateGroupAsync()
     {
-        // Create a new group with a default name — user edits inline
         var group = new ConnectionGroup { Name = $"New Group {AvailableGroups.Count + 1}" };
         await _connectionStore.SaveGroupAsync(group);
         AvailableGroups.Add(group);
         SelectedGroup = group;
+    }
+
+    [RelayCommand]
+    private async Task DeleteGroupAsync()
+    {
+        if (SelectedGroup == null) return;
+        await _connectionStore.DeleteGroupAsync(SelectedGroup.Id);
+        AvailableGroups.Remove(SelectedGroup);
+        SelectedGroup = null;
     }
 
     // ── MSAL with persistent token cache ──────────────────────────────
@@ -496,46 +504,102 @@ public partial class ConnectionDialogViewModel : ViewModelBase
 
         if (OperatingSystem.IsMacOS())
         {
-            string[] chromiumApps =
-            [
-                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-                "/Applications/Arc.app/Contents/MacOS/Arc",
-                "/Applications/Chromium.app/Contents/MacOS/Chromium",
-                "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-            ];
-            foreach (var path in chromiumApps)
+            // Detect default browser on macOS via LaunchServices
+            var defaultBrowser = DetectDefaultBrowserMac();
+
+            // Map browser bundle ID / name to private browsing flags
+            var privateFlag = defaultBrowser?.ToLowerInvariant() switch
             {
-                if (!File.Exists(path)) continue;
-                Process.Start(new ProcessStartInfo { FileName = path, Arguments = $"--incognito \"{url}\"", UseShellExecute = false });
-                return Task.CompletedTask;
-            }
-            const string firefox = "/Applications/Firefox.app/Contents/MacOS/firefox";
-            if (File.Exists(firefox))
+                var b when b != null && b.Contains("firefox") => "--private-window",
+                var b when b != null && b.Contains("safari") => "", // Safari doesn't support CLI private mode
+                _ => "--incognito" // Chrome, Brave, Arc, Edge, Chromium all use --incognito
+            };
+
+            if (!string.IsNullOrEmpty(privateFlag))
             {
-                Process.Start(new ProcessStartInfo { FileName = firefox, Arguments = $"--private-window \"{url}\"", UseShellExecute = false });
-                return Task.CompletedTask;
+                // Known browsers that support private mode via CLI
+                (string app, string flag)[] browsers =
+                [
+                    ("Google Chrome", "--incognito"),
+                    ("Brave Browser", "--incognito"),
+                    ("Microsoft Edge", "--inprivate"),
+                    ("Arc", "--incognito"),
+                    ("Chromium", "--incognito"),
+                    ("Firefox", "--private-window"),
+                    ("Vivaldi", "--incognito"),
+                    ("Opera", "--private"),
+                ];
+
+                foreach (var (app, flag) in browsers)
+                {
+                    if (!Directory.Exists($"/Applications/{app}.app")) continue;
+                    Process.Start(new ProcessStartInfo
+                    {
+                        FileName = "open",
+                        Arguments = $"-na \"{app}\" --args {flag} --new-window \"{url}\"",
+                        UseShellExecute = false
+                    });
+                    return Task.CompletedTask;
+                }
             }
-            Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+
+            // Fallback: open in default browser (no private mode guarantee)
+            Process.Start(new ProcessStartInfo { FileName = "open", Arguments = $"\"{url}\"", UseShellExecute = false });
         }
         else if (OperatingSystem.IsWindows())
         {
-            var chrome = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                @"Google\Chrome\Application\chrome.exe");
-            if (File.Exists(chrome))
+            // Try common Windows browsers with private flags
+            (string path, string flag)[] winBrowsers =
+            [
+                (Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Google\Chrome\Application\chrome.exe"), "--incognito"),
+                (@"C:\Program Files\Google\Chrome\Application\chrome.exe", "--incognito"),
+                (@"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", "--inprivate"),
+                (@"C:\Program Files\Microsoft\Edge\Application\msedge.exe", "--inprivate"),
+                (@"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe", "--incognito"),
+                (@"C:\Program Files\Mozilla Firefox\firefox.exe", "--private-window"),
+            ];
+
+            foreach (var (path, flag) in winBrowsers)
             {
-                Process.Start(new ProcessStartInfo { FileName = chrome, Arguments = $"--incognito \"{url}\"", UseShellExecute = false });
+                if (!File.Exists(path)) continue;
+                Process.Start(new ProcessStartInfo { FileName = path, Arguments = $"{flag} --new-window \"{url}\"", UseShellExecute = false });
                 return Task.CompletedTask;
             }
-            var edge = @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
-            if (File.Exists(edge))
-            {
-                Process.Start(new ProcessStartInfo { FileName = edge, Arguments = $"--inprivate \"{url}\"", UseShellExecute = false });
-                return Task.CompletedTask;
-            }
+
             Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
         }
 
         return Task.CompletedTask;
+    }
+
+    private static string? DetectDefaultBrowserMac()
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = "defaults",
+                Arguments = "read com.apple.LaunchServices/com.apple.launchservices.secure LSHandlers",
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+                CreateNoWindow = true
+            };
+            var proc = Process.Start(psi);
+            var output = proc?.StandardOutput.ReadToEnd() ?? "";
+            proc?.WaitForExit();
+
+            // Look for the http handler
+            if (output.Contains("com.google.chrome", StringComparison.OrdinalIgnoreCase)) return "Google Chrome";
+            if (output.Contains("com.brave.browser", StringComparison.OrdinalIgnoreCase)) return "Brave Browser";
+            if (output.Contains("com.microsoft.edgemac", StringComparison.OrdinalIgnoreCase)) return "Microsoft Edge";
+            if (output.Contains("org.mozilla.firefox", StringComparison.OrdinalIgnoreCase)) return "Firefox";
+            if (output.Contains("company.thebrowser.browser", StringComparison.OrdinalIgnoreCase)) return "Arc";
+            if (output.Contains("com.apple.safari", StringComparison.OrdinalIgnoreCase)) return "Safari";
+            if (output.Contains("com.vivaldi.vivaldi", StringComparison.OrdinalIgnoreCase)) return "Vivaldi";
+        }
+        catch { }
+
+        return null;
     }
 
     private static string? ExtractEmailFromToken(string token)

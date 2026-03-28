@@ -225,10 +225,15 @@
                                         </DataTemplate>
                                     </ComboBox.ItemTemplate>
                                 </ComboBox>
-                                <Button Grid.Column="1" Content="+" Margin="4,0,0,0"
-                                        Classes="ghost" ToolTip.Tip="Create new group"
-                                        Command="{Binding CreateGroupCommand}"
-                                        FontWeight="Bold" FontSize="14" Padding="8,4"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2" Margin="4,0,0,0">
+                                    <Button Content="+" Classes="ghost" ToolTip.Tip="Create new group"
+                                            Command="{Binding CreateGroupCommand}"
+                                            FontWeight="Bold" FontSize="14" Padding="6,4"/>
+                                    <Button Content="&#x2715;" Classes="ghost" ToolTip.Tip="Delete selected group"
+                                            Command="{Binding DeleteGroupCommand}"
+                                            IsEnabled="{Binding SelectedGroup, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                            FontSize="11" Padding="6,4"/>
+                                </StackPanel>
                             </Grid>
                         </StackPanel>
                         <StackPanel Grid.Column="3" Spacing="2">
