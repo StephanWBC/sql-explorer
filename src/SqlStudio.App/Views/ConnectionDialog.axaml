@@ -260,13 +260,18 @@
                         </StackPanel>
                         <StackPanel Grid.Column="2" Spacing="2">
                             <TextBlock Text="ENVIRONMENT" Classes="lbl"/>
-                            <AutoCompleteBox ItemsSource="{Binding EnvironmentPresets}"
-                                            Text="{Binding EnvironmentLabel}"
-                                            Watermark="e.g. prod, staging, dev"
-                                            FilterMode="Contains"
-                                            HorizontalAlignment="Stretch"
-                                            FontSize="13"
-                                            CornerRadius="6"/>
+                            <ComboBox ItemsSource="{Binding EnvironmentPresets}"
+                                      SelectedItem="{Binding EnvironmentLabel}"
+                                      PlaceholderText="Select environment"
+                                      HorizontalAlignment="Stretch"
+                                      FontSize="13"
+                                      CornerRadius="6"/>
+                            <!-- Custom override when "Custom" is selected -->
+                            <TextBox Text="{Binding CustomEnvironmentLabel}"
+                                     Watermark="Type custom environment name..."
+                                     FontSize="13" CornerRadius="6" Padding="10,7"
+                                     IsVisible="{Binding IsCustomEnvironment}"
+                                     Margin="0,4,0,0"/>
                         </StackPanel>
                     </Grid>
 

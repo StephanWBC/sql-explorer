@@ -76,6 +76,18 @@ public partial class ConnectionDialogViewModel : ViewModelBase
     [ObservableProperty] private string _environmentLabel = string.Empty;
     [ObservableProperty] private bool _isEditingGroupName;
     [ObservableProperty] private string _editGroupName = string.Empty;
+    [ObservableProperty] private string _customEnvironmentLabel = string.Empty;
+    [ObservableProperty] private bool _isCustomEnvironment;
+
+    partial void OnEnvironmentLabelChanged(string value)
+    {
+        IsCustomEnvironment = value == "Custom";
+        if (IsCustomEnvironment) CustomEnvironmentLabel = "";
+    }
+
+    /// The actual environment label to save (resolves "Custom" → the typed value)
+    public string ResolvedEnvironmentLabel =>
+        EnvironmentLabel == "Custom" ? CustomEnvironmentLabel : EnvironmentLabel;
 
     private readonly List<AzureDatabase> _allDatabases = new();
 
@@ -248,41 +260,64 @@ public partial class ConnectionDialogViewModel : ViewModelBase
 
     private async Task RestoreEntraCredentialAsync()
     {
+        if (!File.Exists(EntraCredFile)) return;
+
+        string? email = null;
         try
         {
-            if (!File.Exists(EntraCredFile)) return;
             var json = await File.ReadAllTextAsync(EntraCredFile);
-            var email = ExtractJsonValue(json, "email");
+            email = ExtractJsonValue(json, "email");
             var tenantId = ExtractJsonValue(json, "tenantId");
             if (string.IsNullOrEmpty(email)) return;
 
             EntraUserEmail = email;
             if (!string.IsNullOrEmpty(tenantId)) TenantId = tenantId;
+        }
+        catch { return; }
 
-            // Try silent refresh from persistent MSAL cache
+        // Try silent refresh from persistent MSAL cache
+        try
+        {
             var app = await GetOrCreateMsalAppAsync();
             var accounts = await app.GetAccountsAsync();
             var account = accounts.FirstOrDefault();
-            if (account == null) return;
+            if (account == null)
+            {
+                StatusMessage = "No cached account. Click Sign In.";
+                return;
+            }
 
             _msalAccount = account;
+
+            // ARM token for Azure management API
             var armResult = await app.AcquireTokenSilent(ArmScopes, account).ExecuteAsync();
             _armAccessToken = armResult.AccessToken;
             _cachedEntraEmail = email;
 
+            // SQL token — optional, will be acquired at connect time if needed
             try
             {
                 var sqlResult = await app.AcquireTokenSilent(SqlScopes, account).ExecuteAsync();
                 _entraToken = new AccessToken(sqlResult.AccessToken, sqlResult.ExpiresOn);
             }
-            catch { }
+            catch { /* fine — acquired on connect */ }
 
+            // AUTH IS DONE — set signed in BEFORE loading subscriptions
             IsEntraSignedIn = true;
-            await DiscoverSubscriptionsAsync();
+            StatusMessage = $"Signed in as {email}";
+
+            // Subscription loading is SEPARATE — failure here does NOT affect auth state
+            try { await DiscoverSubscriptionsAsync(); }
+            catch (Exception ex) { StatusMessage = $"Signed in. Subscription load failed: {ex.Message}"; }
         }
-        catch
+        catch (MsalUiRequiredException)
         {
-            // Token cache expired — user needs to sign in again
+            StatusMessage = "Session expired. Click Sign In to re-authenticate.";
+            IsEntraSignedIn = false;
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Auth restore failed: {ex.Message}";
             IsEntraSignedIn = false;
         }
     }
@@ -587,36 +622,29 @@ public partial class ConnectionDialogViewModel : ViewModelBase
 
     // ── Incognito browser launcher ────────────────────────────────────
 
-    // Dedicated temp profile dir — forces Chrome to spawn a SEPARATE process
-    // even when Chrome is already running. Without this, Chrome ignores --incognito
-    // and opens the URL as a regular tab in the existing window via IPC.
-    private static readonly string IncognitoProfileDir = Path.Combine(
-        Path.GetTempPath(), "sqlexplorer-auth-profile");
-
     private static Task OpenBrowserInIncognito(Uri uri)
     {
         var url = uri.AbsoluteUri;
 
         if (OperatingSystem.IsMacOS())
         {
-            // The ONLY way to guarantee incognito when Chrome is already running:
-            // --user-data-dir forces a completely separate Chrome process.
-            (string binary, string flag)[] macBrowsers =
-            [
-                ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "--incognito"),
-                ("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser", "--incognito"),
-                ("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "--inprivate"),
-                ("/Applications/Chromium.app/Contents/MacOS/Chromium", "--incognito"),
-                ("/Applications/Vivaldi.app/Contents/MacOS/Vivaldi", "--incognito"),
-            ];
-
-            foreach (var (binary, flag) in macBrowsers)
+            // Use AppleScript — the ONLY 100% reliable way to open Chrome incognito
+            // on macOS. Direct binary calls and 'open -na' both fail when Chrome
+            // is already running because they send IPC to the existing process.
+            if (Directory.Exists("/Applications/Google Chrome.app"))
             {
-                if (!File.Exists(binary)) continue;
+                // AppleScript is the ONLY reliable way. Write to temp file to avoid escaping hell.
+                var scriptPath = Path.Combine(Path.GetTempPath(), "sqlexplorer-open-incognito.scpt");
+                File.WriteAllText(scriptPath,
+                    $"tell application \"Google Chrome\"\n" +
+                    $"  make new window with properties {{mode:\"incognito\"}}\n" +
+                    $"  set URL of active tab of front window to \"{url}\"\n" +
+                    $"  activate\n" +
+                    $"end tell\n");
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = binary,
-                    Arguments = $"{flag} --no-first-run --no-default-browser-check --user-data-dir=\"{IncognitoProfileDir}\" \"{url}\"",
+                    FileName = "osascript",
+                    Arguments = scriptPath,
                     UseShellExecute = false,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true
@@ -624,31 +652,19 @@ public partial class ConnectionDialogViewModel : ViewModelBase
                 return Task.CompletedTask;
             }
 
-            // Firefox doesn't need --user-data-dir, it handles --private-window correctly
-            const string firefox = "/Applications/Firefox.app/Contents/MacOS/firefox";
-            if (File.Exists(firefox))
-            {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = firefox,
-                    Arguments = $"--private-window \"{url}\"",
-                    UseShellExecute = false
-                });
-                return Task.CompletedTask;
-            }
-
-            // Fallback
+            // Fallback for other browsers
             Process.Start(new ProcessStartInfo { FileName = "open", Arguments = $"\"{url}\"", UseShellExecute = false });
         }
         else if (OperatingSystem.IsWindows())
         {
+            // Windows: --user-data-dir forces a separate process
+            var profileDir = Path.Combine(Path.GetTempPath(), "sqlexplorer-auth");
             (string path, string flag)[] winBrowsers =
             [
                 (Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Google\Chrome\Application\chrome.exe"), "--incognito"),
                 (@"C:\Program Files\Google\Chrome\Application\chrome.exe", "--incognito"),
                 (@"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe", "--inprivate"),
                 (@"C:\Program Files\Microsoft\Edge\Application\msedge.exe", "--inprivate"),
-                (@"C:\Program Files\BraveSoftware\Brave-Browser\Application\brave.exe", "--incognito"),
             ];
 
             foreach (var (path, flag) in winBrowsers)
@@ -657,16 +673,9 @@ public partial class ConnectionDialogViewModel : ViewModelBase
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = path,
-                    Arguments = $"{flag} --no-first-run --no-default-browser-check --user-data-dir=\"{IncognitoProfileDir}\" \"{url}\"",
+                    Arguments = $"{flag} --no-first-run --user-data-dir=\"{profileDir}\" \"{url}\"",
                     UseShellExecute = false
                 });
-                return Task.CompletedTask;
-            }
-
-            const string firefoxWin = @"C:\Program Files\Mozilla Firefox\firefox.exe";
-            if (File.Exists(firefoxWin))
-            {
-                Process.Start(new ProcessStartInfo { FileName = firefoxWin, Arguments = $"--private-window \"{url}\"", UseShellExecute = false });
                 return Task.CompletedTask;
             }
 
@@ -779,7 +788,7 @@ public partial class ConnectionDialogViewModel : ViewModelBase
                 Encrypt = Encrypt,
                 LastConnected = DateTime.UtcNow,
                 GroupId = SelectedGroup?.Id,
-                EnvironmentLabel = string.IsNullOrWhiteSpace(EnvironmentLabel) ? null : EnvironmentLabel.Trim()
+                EnvironmentLabel = string.IsNullOrWhiteSpace(ResolvedEnvironmentLabel) ? null : ResolvedEnvironmentLabel.Trim()
             };
 
             if (SaveConnection)
