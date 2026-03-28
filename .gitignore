@@ -20,7 +20,7 @@ publish/
 
 # IDE
 .idea/
-.vscode/
+# .vscode/ — keep launch.json and tasks.json for Swift debugging
 .vs/
 .claude/
 

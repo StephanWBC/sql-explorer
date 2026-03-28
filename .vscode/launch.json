@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Run SQL Explorer",
+      "program": "${workspaceFolder}/.build/debug/SQLExplorer",
+      "preLaunchTask": "swift-build",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Run SQL Explorer (Release)",
+      "program": "${workspaceFolder}/.build/release/SQLExplorer",
+      "preLaunchTask": "swift-build-release",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}
