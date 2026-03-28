@@ -29,10 +29,12 @@ public partial class ConnectionDialogViewModel : ViewModelBase
 {
     private readonly IConnectionManager _connectionManager;
     private readonly IConnectionStore _connectionStore;
-    private AccessToken? _entraToken;
-    private string? _armAccessToken;
-    private IPublicClientApplication? _msalApp;
-    private IAccount? _msalAccount;
+
+    // STATIC — shared across all dialog instances so tokens survive dialog close/reopen
+    private static AccessToken? _entraToken;
+    private static string? _armAccessToken;
+    private static IPublicClientApplication? _msalApp;
+    private static IAccount? _msalAccount;
 
     private static readonly string[] SqlScopes = ["https://database.windows.net/.default"];
     private static readonly string[] ArmScopes = ["https://management.azure.com/.default"];
@@ -577,51 +579,38 @@ public partial class ConnectionDialogViewModel : ViewModelBase
 
         if (OperatingSystem.IsMacOS())
         {
-            // Detect default browser on macOS via LaunchServices
-            var defaultBrowser = DetectDefaultBrowserMac();
+            // IMPORTANT: 'open -na' does NOT work when Chrome is already running —
+            // it just sends the URL to the existing session as a regular tab.
+            // Must call the browser binary directly to force incognito.
+            (string binary, string flag)[] macBrowsers =
+            [
+                ("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "--incognito"),
+                ("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser", "--incognito"),
+                ("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge", "--inprivate"),
+                ("/Applications/Chromium.app/Contents/MacOS/Chromium", "--incognito"),
+                ("/Applications/Vivaldi.app/Contents/MacOS/Vivaldi", "--incognito"),
+                ("/Applications/Firefox.app/Contents/MacOS/firefox", "--private-window"),
+            ];
 
-            // Map browser bundle ID / name to private browsing flags
-            var privateFlag = defaultBrowser?.ToLowerInvariant() switch
+            foreach (var (binary, flag) in macBrowsers)
             {
-                var b when b != null && b.Contains("firefox") => "--private-window",
-                var b when b != null && b.Contains("safari") => "", // Safari doesn't support CLI private mode
-                _ => "--incognito" // Chrome, Brave, Arc, Edge, Chromium all use --incognito
-            };
-
-            if (!string.IsNullOrEmpty(privateFlag))
-            {
-                // Known browsers that support private mode via CLI
-                (string app, string flag)[] browsers =
-                [
-                    ("Google Chrome", "--incognito"),
-                    ("Brave Browser", "--incognito"),
-                    ("Microsoft Edge", "--inprivate"),
-                    ("Arc", "--incognito"),
-                    ("Chromium", "--incognito"),
-                    ("Firefox", "--private-window"),
-                    ("Vivaldi", "--incognito"),
-                    ("Opera", "--private"),
-                ];
-
-                foreach (var (app, flag) in browsers)
+                if (!File.Exists(binary)) continue;
+                Process.Start(new ProcessStartInfo
                 {
-                    if (!Directory.Exists($"/Applications/{app}.app")) continue;
-                    Process.Start(new ProcessStartInfo
-                    {
-                        FileName = "open",
-                        Arguments = $"-na \"{app}\" --args {flag} --new-window \"{url}\"",
-                        UseShellExecute = false
-                    });
-                    return Task.CompletedTask;
-                }
+                    FileName = binary,
+                    Arguments = $"{flag} --new-window \"{url}\"",
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
+                });
+                return Task.CompletedTask;
             }
 
-            // Fallback: open in default browser (no private mode guarantee)
+            // Fallback
             Process.Start(new ProcessStartInfo { FileName = "open", Arguments = $"\"{url}\"", UseShellExecute = false });
         }
         else if (OperatingSystem.IsWindows())
         {
-            // Try common Windows browsers with private flags
             (string path, string flag)[] winBrowsers =
             [
                 (Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), @"Google\Chrome\Application\chrome.exe"), "--incognito"),
