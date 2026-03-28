@@ -59,3 +59,11 @@ public class BoolToFontWeightConverter : IValueConverter
         value is true ? Avalonia.Media.FontWeight.Bold : Avalonia.Media.FontWeight.Normal;
     public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
 }
+
+public class BoolToGroupIconConverter : IValueConverter
+{
+    public static readonly BoolToGroupIconConverter Instance = new();
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture) =>
+        value is true ? "\U0001F4C2" : "\U0001F4E6"; // open folder vs package
+    public object ConvertBack(object? value, Type targetType, object? parameter, CultureInfo culture) => throw new NotImplementedException();
+}

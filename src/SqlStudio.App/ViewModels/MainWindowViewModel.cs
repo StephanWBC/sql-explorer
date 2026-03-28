@@ -35,6 +35,7 @@ public partial class MainWindowViewModel : ViewModelBase
     public ObservableCollection<QueryTabViewModel> QueryTabs { get; } = new();
 
     public event EventHandler? ConnectRequested;
+    public event EventHandler? ManageConnectionsRequested;
     public event Func<Task<(bool Result, string FilePath)>>? SaveFileRequested;
     public event Func<Task<(bool Result, string FilePath)>>? OpenFileRequested;
 
@@ -63,6 +64,12 @@ public partial class MainWindowViewModel : ViewModelBase
     private void Connect()
     {
         ConnectRequested?.Invoke(this, EventArgs.Empty);
+    }
+
+    [RelayCommand]
+    private void ManageConnections()
+    {
+        ManageConnectionsRequested?.Invoke(this, EventArgs.Empty);
     }
 
     public void OnConnected(Guid connectionId, ConnectionInfo connectionInfo, SavedConnection? saved = null)

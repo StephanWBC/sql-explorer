@@ -56,5 +56,6 @@ public partial class App : Application
         // ViewModels
         services.AddTransient<MainWindowViewModel>();
         services.AddTransient<ConnectionDialogViewModel>();
+        services.AddTransient<ConnectionManagerViewModel>();
     }
 }

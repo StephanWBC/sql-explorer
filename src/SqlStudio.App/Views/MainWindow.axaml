@@ -44,6 +44,8 @@
 
                     <Button Content="Connect" Command="{Binding ConnectCommand}"
                             Classes="toolPrimary" ToolTip.Tip="New connection (Ctrl+N)"/>
+                    <Button Content="Manage" Command="{Binding ManageConnectionsCommand}"
+                            Classes="tool" ToolTip.Tip="Manage connection groups"/>
                     <Button Content="Disconnect" Command="{Binding DisconnectCommand}"
                             IsEnabled="{Binding IsConnected}" Classes="tool" ToolTip.Tip="Disconnect"/>
 

@@ -23,8 +23,16 @@ public partial class MainWindow : Window
         if (DataContext is MainWindowViewModel vm)
         {
             vm.ConnectRequested += OnConnectRequested;
+            vm.ManageConnectionsRequested += OnManageConnectionsRequested;
             vm.SaveFileRequested += OnSaveFileRequested;
         }
+    }
+
+    private async void OnManageConnectionsRequested(object? sender, EventArgs e)
+    {
+        var vm = App.Services.GetRequiredService<ConnectionManagerViewModel>();
+        var dialog = new ConnectionManagerDialog { DataContext = vm };
+        await dialog.ShowDialog(this);
     }
 
     private async void OnConnectRequested(object? sender, EventArgs e)
