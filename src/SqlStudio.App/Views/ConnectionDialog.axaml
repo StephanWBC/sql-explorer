@@ -210,10 +210,12 @@
                     </StackPanel>
 
                     <!-- Connection Group + Environment -->
-                    <Grid ColumnDefinitions="*,Auto,16,*">
+                    <Grid ColumnDefinitions="*,16,*">
                         <StackPanel Grid.Column="0" Spacing="2">
                             <TextBlock Text="GROUP" Classes="lbl"/>
-                            <Grid ColumnDefinitions="*,Auto">
+
+                            <!-- Normal mode: ComboBox + buttons -->
+                            <Grid ColumnDefinitions="*,Auto" IsVisible="{Binding !IsEditingGroupName}">
                                 <ComboBox Grid.Column="0"
                                           ItemsSource="{Binding AvailableGroups}"
                                           SelectedItem="{Binding SelectedGroup}"
@@ -225,18 +227,38 @@
                                         </DataTemplate>
                                     </ComboBox.ItemTemplate>
                                 </ComboBox>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="2" Margin="4,0,0,0">
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="1" Margin="4,0,0,0">
                                     <Button Content="+" Classes="ghost" ToolTip.Tip="Create new group"
-                                            Command="{Binding CreateGroupCommand}"
-                                            FontWeight="Bold" FontSize="14" Padding="6,4"/>
-                                    <Button Content="&#x2715;" Classes="ghost" ToolTip.Tip="Delete selected group"
+                                            Command="{Binding StartCreateGroupCommand}"
+                                            FontWeight="Bold" FontSize="14" Padding="5,4"/>
+                                    <Button Content="&#x270E;" Classes="ghost" ToolTip.Tip="Rename group"
+                                            Command="{Binding StartRenameGroupCommand}"
+                                            IsEnabled="{Binding SelectedGroup, Converter={x:Static ObjectConverters.IsNotNull}}"
+                                            FontSize="11" Padding="5,4"/>
+                                    <Button Content="&#x2715;" Classes="ghost" ToolTip.Tip="Delete group"
                                             Command="{Binding DeleteGroupCommand}"
                                             IsEnabled="{Binding SelectedGroup, Converter={x:Static ObjectConverters.IsNotNull}}"
-                                            FontSize="11" Padding="6,4"/>
+                                            FontSize="11" Padding="5,4"/>
                                 </StackPanel>
                             </Grid>
+
+                            <!-- Edit mode: TextBox + confirm/cancel -->
+                            <Grid ColumnDefinitions="*,Auto,Auto" IsVisible="{Binding IsEditingGroupName}">
+                                <TextBox Grid.Column="0" Text="{Binding EditGroupName}"
+                                         Watermark="Type group name..."
+                                         FontSize="13" CornerRadius="6" Padding="10,7"/>
+                                <Button Grid.Column="1" Content="&#x2713;" Classes="ghost"
+                                        Command="{Binding ConfirmGroupNameCommand}"
+                                        FontSize="14" Padding="6,4" Margin="4,0,0,0"
+                                        Foreground="#3FB950" FontWeight="Bold"
+                                        ToolTip.Tip="Confirm"/>
+                                <Button Grid.Column="2" Content="&#x2715;" Classes="ghost"
+                                        Command="{Binding CancelGroupEditCommand}"
+                                        FontSize="11" Padding="6,4"
+                                        ToolTip.Tip="Cancel"/>
+                            </Grid>
                         </StackPanel>
-                        <StackPanel Grid.Column="3" Spacing="2">
+                        <StackPanel Grid.Column="2" Spacing="2">
                             <TextBlock Text="ENVIRONMENT" Classes="lbl"/>
                             <AutoCompleteBox ItemsSource="{Binding EnvironmentPresets}"
                                             Text="{Binding EnvironmentLabel}"

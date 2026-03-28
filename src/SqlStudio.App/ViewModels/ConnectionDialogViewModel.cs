@@ -71,6 +71,8 @@ public partial class ConnectionDialogViewModel : ViewModelBase
     // Connection group + environment
     [ObservableProperty] private ConnectionGroup? _selectedGroup;
     [ObservableProperty] private string _environmentLabel = string.Empty;
+    [ObservableProperty] private bool _isEditingGroupName;
+    [ObservableProperty] private string _editGroupName = string.Empty;
 
     private readonly List<AzureDatabase> _allDatabases = new();
 
@@ -142,12 +144,53 @@ public partial class ConnectionDialogViewModel : ViewModelBase
     }
 
     [RelayCommand]
-    private async Task CreateGroupAsync()
+    private void StartCreateGroup()
     {
-        var group = new ConnectionGroup { Name = $"New Group {AvailableGroups.Count + 1}" };
-        await _connectionStore.SaveGroupAsync(group);
-        AvailableGroups.Add(group);
-        SelectedGroup = group;
+        EditGroupName = "";
+        IsEditingGroupName = true;
+    }
+
+    [RelayCommand]
+    private void StartRenameGroup()
+    {
+        if (SelectedGroup == null) return;
+        EditGroupName = SelectedGroup.Name;
+        IsEditingGroupName = true;
+    }
+
+    [RelayCommand]
+    private async Task ConfirmGroupNameAsync()
+    {
+        var name = EditGroupName.Trim();
+        if (string.IsNullOrEmpty(name)) { IsEditingGroupName = false; return; }
+
+        if (SelectedGroup != null && AvailableGroups.Contains(SelectedGroup))
+        {
+            // Rename existing
+            SelectedGroup.Name = name;
+            await _connectionStore.SaveGroupAsync(SelectedGroup);
+            // Force ComboBox refresh
+            var idx = AvailableGroups.IndexOf(SelectedGroup);
+            var g = SelectedGroup;
+            AvailableGroups.RemoveAt(idx);
+            AvailableGroups.Insert(idx, g);
+            SelectedGroup = g;
+        }
+        else
+        {
+            // Create new
+            var group = new ConnectionGroup { Name = name };
+            await _connectionStore.SaveGroupAsync(group);
+            AvailableGroups.Add(group);
+            SelectedGroup = group;
+        }
+        IsEditingGroupName = false;
+    }
+
+    [RelayCommand]
+    private void CancelGroupEdit()
+    {
+        IsEditingGroupName = false;
     }
 
     [RelayCommand]
