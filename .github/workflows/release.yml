@@ -5,145 +5,82 @@ on:
     branches: [main]
   workflow_dispatch:
 
-env:
-  DOTNET_VERSION: '10.0.x'
-
 jobs:
   version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Calculate version from commit count
+      - name: Calculate version
         id: version
         run: |
-          # Auto-increment: 1.0.<commit-count>
           COMMIT_COUNT=$(git rev-list --count HEAD)
           VERSION="1.0.${COMMIT_COUNT}"
-          TAG="v${VERSION}"
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
-          echo "tag=${TAG}" >> $GITHUB_OUTPUT
-          echo "Version: ${VERSION}, Tag: ${TAG}"
-
-      - name: Create git tag
+          echo "tag=v${VERSION}" >> $GITHUB_OUTPUT
+          echo "Version: ${VERSION}"
+      - name: Create tag
         run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git tag -a "${{ steps.version.outputs.tag }}" -m "Release ${{ steps.version.outputs.tag }}" || true
-          git push origin "${{ steps.version.outputs.tag }}" || true
+          git tag ${{ steps.version.outputs.tag }} || true
+          git push origin ${{ steps.version.outputs.tag }} || true
 
   build-mac:
     needs: version
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
 
-      - name: Build macOS DMG
-        run: |
-          chmod +x build/build-mac.sh
-          bash build/build-mac.sh ${{ needs.version.outputs.version }}
+      - name: Install FreeTDS
+        run: brew install freetds
+
+      - name: Build release
+        run: swift build -c release
+
+      - name: Create .app bundle and DMG
+        run: bash build/build-mac.sh ${{ needs.version.outputs.version }}
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: mac-dmg
-          path: publish/*.dmg
-
-  build-windows:
-    needs: version
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: ${{ env.DOTNET_VERSION }}
-
-      - name: Publish Windows x64
-        run: |
-          dotnet publish src/SqlStudio.App/SqlStudio.App.csproj `
-            -c Release `
-            -r win-x64 `
-            --self-contained true `
-            -p:PublishSingleFile=true `
-            -p:IncludeNativeLibrariesForSelfExtract=true `
-            -p:Version=${{ needs.version.outputs.version }} `
-            -o publish/windows
-
-      - name: Install WiX Toolset
-        run: dotnet tool install -g wix
-        continue-on-error: true
-
-      - name: Build MSI
-        run: |
-          wix build build/SqlExplorer.wxs `
-            -d PublishDir=publish\windows `
-            -o publish/SQLExplorer-${{ needs.version.outputs.version }}-win-x64.msi
-        continue-on-error: true
-
-      - name: Create ZIP
-        run: Compress-Archive -Path publish\windows\* -DestinationPath publish\SQLExplorer-${{ needs.version.outputs.version }}-win-x64.zip
-
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-installers
-          path: |
-            publish/*.msi
-            publish/*.zip
+          name: SQLExplorer-mac-dmg
+          path: publish/SQLExplorer-*-mac.dmg
 
   release:
-    needs: [version, build-mac, build-windows]
+    needs: [version, build-mac]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
+
+      - name: Download macOS DMG
+        uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          name: SQLExplorer-mac-dmg
+          path: artifacts/
 
-      - name: List artifacts
-        run: find artifacts -type f
-
-      - name: Delete existing release if any
-        run: gh release delete "${{ needs.version.outputs.tag }}" --yes --cleanup-tag || true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-
-      - name: Create GitHub Release
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          name: SQL Explorer ${{ needs.version.outputs.tag }}
-          make_latest: true
+          name: SQL Explorer ${{ needs.version.outputs.version }}
           body: |
-            ## SQL Explorer ${{ needs.version.outputs.tag }}
+            ## SQL Explorer ${{ needs.version.outputs.version }}
 
-            Cross-platform SQL Server Management Tool for macOS and Windows.
-            Built from commit `${{ github.sha }}`.
+            Native macOS SQL Server management app built with Swift + SwiftUI.
 
-            ### Downloads
-            | Platform | File | Install |
-            |----------|------|---------|
-            | **macOS** | `SQLExplorer-${{ needs.version.outputs.version }}-mac.dmg` | Open DMG → drag to Applications (overwrites previous version) |
-            | **Windows** | `SQLExplorer-${{ needs.version.outputs.version }}-win-x64.msi` | Run installer |
-            | **Windows (portable)** | `SQLExplorer-${{ needs.version.outputs.version }}-win-x64.zip` | Extract and run |
+            ### Download
+            - **macOS**: `SQLExplorer-${{ needs.version.outputs.version }}-mac.dmg`
 
-            ### macOS Install Note
-            Dragging to Applications will **replace** any existing SQL Explorer installation automatically.
-            If macOS blocks the app, right-click → Open (first launch only).
+            ### Requirements
+            - macOS 14.0 (Sonoma) or later
+            - FreeTDS: `brew install freetds`
           files: |
-            artifacts/mac-dmg/*
-            artifacts/windows-installers/*
+            artifacts/*.dmg
           draft: false
           prerelease: false
+          generate_release_notes: true

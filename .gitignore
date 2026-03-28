@@ -1,9 +1,33 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# Build artifacts
+publish/
+*.dmg
+
+# macOS
+.DS_Store
+*.swp
+*~
+
+# IDE
+.idea/
+.vscode/
+.vs/
+.claude/
+
+# Legacy .NET (removed)
 bin/
 obj/
-.vs/
-.idea/
 *.user
 *.suo
 *.DotSettings.user
-publish/
-.claude/
+Package.resolved
