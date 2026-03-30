@@ -28,6 +28,7 @@ class DatabaseObject: Identifiable, ObservableObject {
     @Published var children: [DatabaseObject] = []
     var groupId: UUID?
     var environmentLabel: String?
+    var serverFqdn: String?
 
     init(
         name: String,

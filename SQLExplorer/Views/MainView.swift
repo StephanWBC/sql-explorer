@@ -2,7 +2,6 @@ import SwiftUI
 
 struct MainView: View {
     @EnvironmentObject var appState: AppState
-    @State private var showingConnectionSheet = false
     @State private var showingConnectionManager = false
     @State private var explorerWidth: CGFloat = 260
 
@@ -94,18 +93,11 @@ struct MainView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
-                    showingConnectionSheet = true
-                } label: {
-                    Label("Connect", systemImage: "bolt.fill")
-                }
-                .help("New connection (⌘N)")
-
-                Button {
                     showingConnectionManager = true
                 } label: {
                     Label("Manage", systemImage: "folder.badge.gearshape")
                 }
-                .help("Manage connections")
+                .help("Manage saved connections")
 
                 Divider()
 
@@ -135,15 +127,14 @@ struct MainView: View {
                 .disabled(!appState.connectionManager.isConnected)
             }
         }
-        .sheet(isPresented: $showingConnectionSheet) {
-            ConnectionSheet(authService: appState.authService)
-                .environmentObject(appState)
-        }
         .sheet(isPresented: $showingConnectionManager) {
             ConnectionManagerView()
                 .environmentObject(appState)
         }
         // Status bar
+        .onChange(of: appState.authService.databases) { _, newDatabases in
+            appState.buildExplorerFromDatabases(newDatabases)
+        }
         .safeAreaInset(edge: .bottom) {
             StatusBarView()
                 .environmentObject(appState)

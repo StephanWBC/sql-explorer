@@ -26,6 +26,7 @@ class AuthService: ObservableObject {
         .appendingPathComponent(".sqlexplorer")
     private static let tokenFile = storeDir.appendingPathComponent("refresh-token.json")
     private static let emailFile = storeDir.appendingPathComponent("auth-email.txt")
+    private static let defaultSubFile = storeDir.appendingPathComponent("default-subscription.txt")
 
     init() {
         setupMSAL()
@@ -303,6 +304,15 @@ class AuthService: ObservableObject {
         try? String(contentsOf: Self.emailFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    func saveDefaultSubscriptionId(_ id: String) {
+        try? FileManager.default.createDirectory(at: Self.storeDir, withIntermediateDirectories: true)
+        try? id.write(to: Self.defaultSubFile, atomically: true, encoding: .utf8)
+    }
+
+    private func loadDefaultSubscriptionId() -> String? {
+        try? String(contentsOf: Self.defaultSubFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - Azure Discovery
 
     func discoverSubscriptions() async {
@@ -324,9 +334,12 @@ class AuthService: ObservableObject {
                 return AzureSubscription(id: id, name: name)
             }.sorted { $0.name < $1.name }
 
-            if let first = subscriptions.first {
-                selectedSubscription = first
-                await discoverDatabases(subscriptionId: first.id, subscriptionName: first.name)
+            // Select saved default subscription, or first
+            let defaultId = loadDefaultSubscriptionId()
+            let selected = subscriptions.first(where: { $0.id == defaultId }) ?? subscriptions.first
+            if let selected {
+                selectedSubscription = selected
+                await discoverDatabases(subscriptionId: selected.id, subscriptionName: selected.name)
             }
         } catch {
             errorMessage = "Subscriptions: \(error.localizedDescription)"

@@ -1,6 +1,5 @@
 import SwiftUI
 
-/// Global app state — shared across all views
 @MainActor
 class AppState: ObservableObject {
     @Published var connectionManager = ConnectionManager()
@@ -29,7 +28,42 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Add a server node to the explorer — nested under its group if applicable
+    /// Build the Explorer tree from discovered Azure databases — grouped by server
+    func buildExplorerFromDatabases(_ databases: [AzureDatabase]) {
+        explorerNodes.removeAll()
+
+        // Group by server FQDN
+        let grouped = Dictionary(grouping: databases, by: { $0.serverFqdn })
+
+        for (serverFqdn, dbs) in grouped.sorted(by: { $0.key < $1.key }) {
+            let shortName = serverFqdn.replacingOccurrences(of: ".database.windows.net", with: "")
+
+            let serverNode = DatabaseObject(
+                name: shortName,
+                objectType: .server,
+                isExpandable: true
+            )
+            serverNode.isLoaded = true  // children are pre-populated
+
+            for db in dbs.sorted(by: { $0.databaseName < $1.databaseName }) {
+                let dbNode = DatabaseObject(
+                    name: db.databaseName,
+                    database: db.databaseName,
+                    objectType: .database,
+                    isExpandable: true
+                )
+                // Store the full server FQDN for connection later
+                dbNode.serverFqdn = db.serverFqdn
+                serverNode.children.append(dbNode)
+            }
+
+            explorerNodes.append(serverNode)
+        }
+
+        statusMessage = "\(databases.count) database(s) across \(grouped.count) server(s)"
+    }
+
+    /// Add a server node (for manual connections)
     func addServerToExplorer(name: String, connectionId: UUID, groupId: UUID?, environmentLabel: String?) {
         let serverNode = DatabaseObject(
             name: name,
@@ -40,29 +74,18 @@ class AppState: ObservableObject {
         serverNode.environmentLabel = environmentLabel
 
         if let groupId {
-            // Find or create group node
             if let groupNode = explorerNodes.first(where: { $0.objectType == .connectionGroup && $0.groupId == groupId }) {
                 groupNode.children.append(serverNode)
-                objectWillChange.send()  // Force UI update
-            } else {
-                // Create group node from store
-                if let group = connectionStore.groups.first(where: { $0.id == groupId }) {
-                    let groupNode = DatabaseObject(
-                        name: group.name,
-                        objectType: .connectionGroup,
-                        isExpandable: true
-                    )
-                    groupNode.groupId = groupId
-                    groupNode.isLoaded = true
-                    groupNode.children.append(serverNode)
-
-                    // Insert groups at the top
-                    let insertIdx = explorerNodes.firstIndex(where: { $0.objectType != .connectionGroup }) ?? explorerNodes.count
-                    explorerNodes.insert(groupNode, at: insertIdx)
-                }
+                objectWillChange.send()
+            } else if let group = connectionStore.groups.first(where: { $0.id == groupId }) {
+                let groupNode = DatabaseObject(name: group.name, objectType: .connectionGroup, isExpandable: true)
+                groupNode.groupId = groupId
+                groupNode.isLoaded = true
+                groupNode.children.append(serverNode)
+                let insertIdx = explorerNodes.firstIndex(where: { $0.objectType != .connectionGroup }) ?? explorerNodes.count
+                explorerNodes.insert(groupNode, at: insertIdx)
             }
         } else {
-            // No group — add at root
             explorerNodes.append(serverNode)
         }
     }

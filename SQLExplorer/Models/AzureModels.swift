@@ -5,7 +5,7 @@ struct AzureSubscription: Identifiable, Hashable {
     let name: String    // display name
 }
 
-struct AzureDatabase: Identifiable, Hashable {
+struct AzureDatabase: Identifiable, Hashable, Equatable {
     let id = UUID()
     let subscriptionId: String
     let subscriptionName: String
