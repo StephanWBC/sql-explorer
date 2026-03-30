@@ -128,13 +128,8 @@ struct ConnectionSheet: View {
                             Picker("Database", selection: $selectedDatabase) {
                                 Text("Select a database").tag(nil as AzureDatabase?)
                                 ForEach(authService.databases) { db in
-                                    VStack(alignment: .leading) {
-                                        Text(db.databaseName)
-                                        Text(db.serverFqdn)
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                    .tag(db as AzureDatabase?)
+                                    Text("\(db.databaseName)  ·  \(db.serverFqdn.replacingOccurrences(of: ".database.windows.net", with: ""))")
+                                        .tag(db as AzureDatabase?)
                                 }
                             }
                             .pickerStyle(.menu)
