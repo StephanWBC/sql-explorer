@@ -2,7 +2,7 @@ import SwiftUI
 
 struct MainView: View {
     @EnvironmentObject var appState: AppState
-    @State private var showingConnectionManager = false
+    // No toolbar — all actions via sidebar or keyboard shortcuts
     @State private var explorerWidth: CGFloat = 260
 
     var body: some View {
@@ -90,47 +90,7 @@ struct MainView: View {
                 }
             }
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    showingConnectionManager = true
-                } label: {
-                    Label("Manage", systemImage: "folder.badge.gearshape")
-                }
-                .help("Manage saved connections")
-
-                Divider()
-
-                Button {
-                    guard let connId = appState.activeConnectionId else { return }
-                    let tab = QueryTab(
-                        title: "Query \(appState.queryTabs.count + 1)",
-                        connectionId: connId,
-                        database: appState.currentDatabase
-                    )
-                    appState.queryTabs.append(tab)
-                    appState.selectedTabId = tab.id
-                } label: {
-                    Label("New Query", systemImage: "plus.rectangle")
-                }
-                .help("New query tab (⌘T)")
-                .disabled(!appState.connectionManager.isConnected)
-
-                Divider()
-
-                Button {
-                    Task { await executeCurrentQuery() }
-                } label: {
-                    Label("Run", systemImage: "play.fill")
-                }
-                .help("Execute query (⌘↵)")
-                .disabled(!appState.connectionManager.isConnected)
-            }
-        }
-        .sheet(isPresented: $showingConnectionManager) {
-            ConnectionManagerView()
-                .environmentObject(appState)
-        }
+        .toolbar(.hidden)
         // Status bar
         .onChange(of: appState.authService.databases) { _, newDatabases in
             appState.buildExplorerFromDatabases(newDatabases)
