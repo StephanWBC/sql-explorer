@@ -1,6 +1,7 @@
 import Foundation
 import MSAL
 
+/// Clean Entra ID authentication — no hacks, no manual Keychain, just MSAL
 @MainActor
 class AuthService: ObservableObject {
     @Published var isSignedIn: Bool = false
@@ -24,8 +25,6 @@ class AuthService: ObservableObject {
 
     private static let storeDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".sqlexplorer")
-    private static let tokenFile = storeDir.appendingPathComponent("refresh-token.json")
-    private static let emailFile = storeDir.appendingPathComponent("auth-email.txt")
     private static let defaultSubFile = storeDir.appendingPathComponent("default-subscription.txt")
 
     init() {
@@ -44,85 +43,30 @@ class AuthService: ObservableObject {
         }
     }
 
-    // MARK: - Session Restore (OAuth2 refresh_token grant — no MSAL needed)
+    // MARK: - Session Restore
 
     func tryRestoreSession() async {
-        // Check if user ever signed in
-        guard let savedEmail = loadEmail() else {
-            print("[Auth] No saved email — first launch")
-            return
-        }
-        userEmail = savedEmail
-        print("[Auth] Found saved session for: \(savedEmail)")
-
-        // Try direct OAuth2 token refresh from saved refresh token
-        if await refreshTokenFromFile(scope: "https://management.azure.com/.default offline_access") {
-            isSignedIn = true
-            print("[Auth] ✅ Session restored via OAuth2 refresh_token grant")
-            await discoverSubscriptions()
-            return
-        }
-
-        // Refresh failed — token expired or revoked
-        print("[Auth] Token refresh failed — user must re-authenticate")
-        errorMessage = "Session expired. Please sign in again."
-        isSignedIn = false
-    }
-
-    /// Use saved refresh_token to get a new access_token via HTTP POST
-    private func refreshTokenFromFile(scope: String) async -> Bool {
-        guard let saved = loadTokenData(),
-              let refreshToken = saved["refresh_token"] else {
-            print("[Auth] No saved refresh token")
-            return false
-        }
-
-        print("[Auth] Attempting OAuth2 refresh_token grant...")
-
-        let tokenURL = URL(string: "https://login.microsoftonline.com/organizations/oauth2/v2.0/token")!
-        var request = URLRequest(url: tokenURL)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 30
-
-        let body = [
-            "client_id=\(Self.clientId)",
-            "grant_type=refresh_token",
-            "refresh_token=\(refreshToken)",
-            "scope=\(scope)",
-        ].joined(separator: "&")
-        request.httpBody = body.data(using: .utf8)
+        guard let app = application else { return }
 
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
-            let httpResponse = response as? HTTPURLResponse
-            print("[Auth] Token endpoint responded: \(httpResponse?.statusCode ?? 0)")
+            let accounts = try app.allAccounts()
+            guard let acct = accounts.first else { return }
 
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let accessToken = json["access_token"] as? String else {
-                if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let error = json["error_description"] as? String {
-                    print("[Auth] Token error: \(error)")
-                }
-                return false
-            }
+            self.account = acct
+            let params = MSALSilentTokenParameters(scopes: Self.armScopes, account: acct)
+            let result = try await app.acquireTokenSilent(with: params)
 
-            armAccessToken = accessToken
-
-            // Save new refresh token (they rotate)
-            if let newRefresh = json["refresh_token"] as? String {
-                saveTokenData(refreshToken: newRefresh)
-                print("[Auth] Saved rotated refresh token")
-            }
-
-            return true
+            armAccessToken = result.accessToken
+            userEmail = acct.username ?? "Signed in"
+            isSignedIn = true
+            await discoverSubscriptions()
         } catch {
-            print("[Auth] HTTP refresh failed: \(error)")
-            return false
+            // Can't restore silently — that's fine, user will sign in
+            isSignedIn = false
         }
     }
 
-    // MARK: - Interactive Sign-In (MSAL — only used once)
+    // MARK: - Sign In / Out
 
     func signIn() async {
         guard let app = application else { return }
@@ -141,90 +85,11 @@ class AuthService: ObservableObject {
             isSignedIn = true
             errorMessage = nil
 
-            // CRITICAL: extract refresh token from MSAL's REAL Keychain entry and save to file
-            saveEmail(userEmail)
-            extractAndSaveRefreshToken()
-            print("[Auth] ✅ Signed in: \(userEmail)")
-
             await discoverSubscriptions()
         } catch {
             errorMessage = "Sign-in failed: \(error.localizedDescription)"
             isSignedIn = false
         }
-    }
-
-    /// Extract refresh token from MSAL's actual Keychain cache
-    /// MSAL stores at service="Microsoft Credentials", NOT "SqlExplorer"
-    private func extractAndSaveRefreshToken() {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: "Microsoft Credentials",
-            kSecReturnData as String: true,
-            kSecReturnAttributes as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-        ]
-        var result: AnyObject?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        guard status == errSecSuccess, let items = result as? [[String: Any]] else {
-            print("[Auth] Could not read MSAL's real Keychain cache (status=\(status))")
-            // Fallback: try the other known service name
-            extractFromAlternateKeychainEntry()
-            return
-        }
-
-        for item in items {
-            guard let data = item[kSecValueData as String] as? Data,
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let refreshTokens = json["RefreshToken"] as? [String: Any] else { continue }
-
-            for (_, value) in refreshTokens {
-                guard let tokenInfo = value as? [String: Any],
-                      let clientId = tokenInfo["client_id"] as? String,
-                      clientId == Self.clientId,
-                      let secret = tokenInfo["secret"] as? String else { continue }
-
-                saveTokenData(refreshToken: secret)
-                print("[Auth] ✅ Extracted refresh token from MSAL cache (Microsoft Credentials)")
-                return
-            }
-        }
-
-        print("[Auth] No matching refresh token found in Microsoft Credentials")
-        extractFromAlternateKeychainEntry()
-    }
-
-    /// Try alternate Keychain service names MSAL might use
-    private func extractFromAlternateKeychainEntry() {
-        // MSAL might also store under different service names depending on version
-        let alternateServices = ["SqlExplorer", "com.sqlexplorer.app", "MSALCache"]
-
-        for service in alternateServices {
-            let query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecReturnData as String: true,
-                kSecMatchLimit as String: kSecMatchLimitAll,
-            ]
-            var result: AnyObject?
-            let status = SecItemCopyMatching(query as CFDictionary, &result)
-            guard status == errSecSuccess, let items = result as? [[String: Any]] else { continue }
-
-            for item in items {
-                guard let data = item[kSecValueData as String] as? Data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let refreshTokens = json["RefreshToken"] as? [String: Any] else { continue }
-
-                for (_, value) in refreshTokens {
-                    guard let tokenInfo = value as? [String: Any],
-                          let secret = tokenInfo["secret"] as? String else { continue }
-
-                    saveTokenData(refreshToken: secret)
-                    print("[Auth] ✅ Extracted refresh token from '\(service)'")
-                    return
-                }
-            }
-        }
-        print("[Auth] ⚠️ Could not find refresh token in any Keychain entry")
     }
 
     func signOut() {
@@ -239,70 +104,30 @@ class AuthService: ObservableObject {
         databases = []
         selectedSubscription = nil
         errorMessage = nil
-        try? FileManager.default.removeItem(at: Self.tokenFile)
-        try? FileManager.default.removeItem(at: Self.emailFile)
     }
 
     // MARK: - SQL Token
 
     func getSQLToken() async -> String? {
-        // Try direct refresh with SQL scope
-        guard let saved = loadTokenData(),
-              let refreshToken = saved["refresh_token"] else { return nil }
-
-        let tokenURL = URL(string: "https://login.microsoftonline.com/organizations/oauth2/v2.0/token")!
-        var request = URLRequest(url: tokenURL)
-        request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 30
-
-        let body = [
-            "client_id=\(Self.clientId)",
-            "grant_type=refresh_token",
-            "refresh_token=\(refreshToken)",
-            "scope=https://database.windows.net/.default offline_access",
-        ].joined(separator: "&")
-        request.httpBody = body.data(using: .utf8)
+        guard let app = application, let account else { return nil }
 
         do {
-            let (data, _) = try await URLSession.shared.data(for: request)
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let accessToken = json["access_token"] as? String else { return nil }
-
-            // Save rotated refresh token
-            if let newRefresh = json["refresh_token"] as? String {
-                saveTokenData(refreshToken: newRefresh)
-            }
-            return accessToken
+            let params = MSALSilentTokenParameters(scopes: Self.sqlScopes, account: account)
+            return try await app.acquireTokenSilent(with: params).accessToken
         } catch {
-            return nil
+            do {
+                let webviewParams = MSALWebviewParameters()
+                webviewParams.webviewType = .wkWebView
+                let params = MSALInteractiveTokenParameters(scopes: Self.sqlScopes, webviewParameters: webviewParams)
+                return try await app.acquireToken(with: params).accessToken
+            } catch {
+                errorMessage = "SQL token failed: \(error.localizedDescription)"
+                return nil
+            }
         }
     }
 
-    // MARK: - File Persistence
-
-    private func saveTokenData(refreshToken: String) {
-        let data: [String: String] = ["refresh_token": refreshToken, "client_id": Self.clientId]
-        try? FileManager.default.createDirectory(at: Self.storeDir, withIntermediateDirectories: true)
-        if let jsonData = try? JSONSerialization.data(withJSONObject: data) {
-            try? jsonData.write(to: Self.tokenFile, options: .atomic)
-        }
-    }
-
-    private func loadTokenData() -> [String: String]? {
-        guard let data = try? Data(contentsOf: Self.tokenFile),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: String] else { return nil }
-        return json
-    }
-
-    private func saveEmail(_ email: String) {
-        try? FileManager.default.createDirectory(at: Self.storeDir, withIntermediateDirectories: true)
-        try? email.write(to: Self.emailFile, atomically: true, encoding: .utf8)
-    }
-
-    private func loadEmail() -> String? {
-        try? String(contentsOf: Self.emailFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
+    // MARK: - Default Subscription
 
     func saveDefaultSubscriptionId(_ id: String) {
         try? FileManager.default.createDirectory(at: Self.storeDir, withIntermediateDirectories: true)
@@ -334,7 +159,6 @@ class AuthService: ObservableObject {
                 return AzureSubscription(id: id, name: name)
             }.sorted { $0.name < $1.name }
 
-            // Select saved default subscription, or first
             let defaultId = loadDefaultSubscriptionId()
             let selected = subscriptions.first(where: { $0.id == defaultId }) ?? subscriptions.first
             if let selected {
