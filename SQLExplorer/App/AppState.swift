@@ -2,11 +2,12 @@ import SwiftUI
 
 @MainActor
 class AppState: ObservableObject {
-    @Published var connectionManager = ConnectionManager()
-    @Published var connectionStore = ConnectionStore()
-    @Published var authService = AuthService()
-    @Published var queryService = QueryExecutionService()
-    @Published var explorerService = ObjectExplorerService()
+    // NOT @Published — these are ObservableObjects; views observe them directly
+    let connectionManager = ConnectionManager()
+    let connectionStore = ConnectionStore()
+    let authService = AuthService()
+    let queryService = QueryExecutionService()
+    let explorerService = ObjectExplorerService()
 
     @Published var activeConnectionId: UUID?
     @Published var statusMessage: String = "Ready"

@@ -6,13 +6,11 @@ struct QueryEditorView: View {
 
     var body: some View {
         VSplitView {
-            // SQL Editor
             VStack(spacing: 0) {
                 SQLTextEditor(text: $tab.sql)
                     .frame(minHeight: 150)
             }
 
-            // Results area
             VStack(spacing: 0) {
                 if tab.isExecuting {
                     ProgressView("Executing...")
@@ -48,7 +46,79 @@ struct QueryEditorView: View {
     }
 }
 
-/// Simple NSTextView-based SQL editor with monospace font
+// MARK: - Pre-compiled Syntax Highlighting
+
+/// All regex patterns compiled ONCE at app launch — not per keystroke
+private enum SQLHighlighter {
+    static let defaultColor = NSColor(red: 0.9, green: 0.93, blue: 0.95, alpha: 1)
+    static let keywordColor = NSColor(red: 0.34, green: 0.65, blue: 1, alpha: 1)
+    static let stringColor = NSColor(red: 0.85, green: 0.55, blue: 0.25, alpha: 1)
+    static let commentColor = NSColor(red: 0.33, green: 0.55, blue: 0.33, alpha: 1)
+    static let numberColor = NSColor(red: 0.7, green: 0.5, blue: 0.85, alpha: 1)
+
+    // Single combined regex for ALL keywords (much faster than 47 separate regexes)
+    static let keywordRegex: NSRegularExpression = {
+        let keywords = [
+            "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP",
+            "TABLE", "VIEW", "INDEX", "PROCEDURE", "FUNCTION", "TRIGGER", "DATABASE",
+            "JOIN", "INNER", "LEFT", "RIGHT", "OUTER", "CROSS", "ON", "AND", "OR", "NOT",
+            "IN", "EXISTS", "BETWEEN", "LIKE", "IS", "NULL", "AS", "ORDER", "BY", "GROUP",
+            "HAVING", "UNION", "ALL", "DISTINCT", "TOP", "INTO", "VALUES", "SET", "EXEC",
+            "DECLARE", "BEGIN", "END", "IF", "ELSE", "WHILE", "RETURN", "CASE", "WHEN", "THEN",
+            "WITH", "GO", "USE", "TRUNCATE", "GRANT", "REVOKE", "DENY", "ASC", "DESC",
+            "PRIMARY", "KEY", "FOREIGN", "REFERENCES", "CONSTRAINT", "DEFAULT", "CHECK",
+            "UNIQUE", "IDENTITY", "SCHEMA", "NOLOCK", "COUNT", "SUM",
+            "AVG", "MIN", "MAX", "ISNULL", "COALESCE", "CONVERT", "CAST",
+        ]
+        let pattern = "\\b(" + keywords.joined(separator: "|") + ")\\b"
+        return try! NSRegularExpression(pattern: pattern, options: .caseInsensitive)
+    }()
+
+    static let stringRegex = try! NSRegularExpression(pattern: "'[^']*'")
+    static let singleCommentRegex = try! NSRegularExpression(pattern: "--.*$", options: .anchorsMatchLines)
+    static let multiCommentRegex = try! NSRegularExpression(pattern: "/\\*[\\s\\S]*?\\*/")
+    static let numberRegex = try! NSRegularExpression(pattern: "\\b\\d+(\\.\\d+)?\\b")
+
+    static func highlight(_ textView: NSTextView) {
+        guard let storage = textView.textStorage else { return }
+        let text = textView.string
+        let fullRange = NSRange(location: 0, length: text.utf16.count)
+        guard fullRange.length > 0 else { return }
+
+        storage.beginEditing()
+
+        // Reset all to default
+        storage.addAttribute(.foregroundColor, value: defaultColor, range: fullRange)
+
+        // Keywords (single regex with alternation — 1 pass instead of 47)
+        for match in keywordRegex.matches(in: text, range: fullRange) {
+            storage.addAttribute(.foregroundColor, value: keywordColor, range: match.range)
+        }
+
+        // Strings
+        for match in stringRegex.matches(in: text, range: fullRange) {
+            storage.addAttribute(.foregroundColor, value: stringColor, range: match.range)
+        }
+
+        // Comments override everything
+        for match in singleCommentRegex.matches(in: text, range: fullRange) {
+            storage.addAttribute(.foregroundColor, value: commentColor, range: match.range)
+        }
+        for match in multiCommentRegex.matches(in: text, range: fullRange) {
+            storage.addAttribute(.foregroundColor, value: commentColor, range: match.range)
+        }
+
+        // Numbers
+        for match in numberRegex.matches(in: text, range: fullRange) {
+            storage.addAttribute(.foregroundColor, value: numberColor, range: match.range)
+        }
+
+        storage.endEditing()
+    }
+}
+
+// MARK: - NSTextView Wrapper
+
 struct SQLTextEditor: NSViewRepresentable {
     @Binding var text: String
 
@@ -66,13 +136,10 @@ struct SQLTextEditor: NSViewRepresentable {
         textView.textContainerInset = NSSize(width: 8, height: 8)
         textView.delegate = context.coordinator
 
-        // Dark theme colors
         textView.backgroundColor = NSColor(red: 0.05, green: 0.07, blue: 0.09, alpha: 1)
         textView.insertionPointColor = .white
-        textView.textColor = NSColor(red: 0.9, green: 0.93, blue: 0.95, alpha: 1)
-        textView.selectedTextAttributes = [
-            .backgroundColor: NSColor.selectedTextBackgroundColor
-        ]
+        textView.textColor = SQLHighlighter.defaultColor
+        textView.selectedTextAttributes = [.backgroundColor: NSColor.selectedTextBackgroundColor]
 
         textView.string = text
 
@@ -92,6 +159,7 @@ struct SQLTextEditor: NSViewRepresentable {
 
     class Coordinator: NSObject, NSTextViewDelegate {
         var text: Binding<String>
+        private var highlightTimer: Timer?
 
         init(text: Binding<String>) {
             self.text = text
@@ -100,69 +168,13 @@ struct SQLTextEditor: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             text.wrappedValue = textView.string
-            highlightSQL(textView)
-        }
 
-        /// Basic T-SQL syntax highlighting
-        private func highlightSQL(_ textView: NSTextView) {
-            let text = textView.string
-            let fullRange = NSRange(location: 0, length: text.utf16.count)
-
-            // Reset to default color
-            let defaultColor = NSColor(red: 0.9, green: 0.93, blue: 0.95, alpha: 1)
-            textView.textStorage?.addAttribute(.foregroundColor, value: defaultColor, range: fullRange)
-
-            // Keywords — blue
-            let keywords = ["SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "DROP",
-                           "TABLE", "VIEW", "INDEX", "PROCEDURE", "FUNCTION", "TRIGGER", "DATABASE",
-                           "JOIN", "INNER", "LEFT", "RIGHT", "OUTER", "CROSS", "ON", "AND", "OR", "NOT",
-                           "IN", "EXISTS", "BETWEEN", "LIKE", "IS", "NULL", "AS", "ORDER", "BY", "GROUP",
-                           "HAVING", "UNION", "ALL", "DISTINCT", "TOP", "INTO", "VALUES", "SET", "EXEC",
-                           "DECLARE", "BEGIN", "END", "IF", "ELSE", "WHILE", "RETURN", "CASE", "WHEN", "THEN",
-                           "WITH", "GO", "USE", "TRUNCATE", "GRANT", "REVOKE", "DENY", "ASC", "DESC",
-                           "PRIMARY", "KEY", "FOREIGN", "REFERENCES", "CONSTRAINT", "DEFAULT", "CHECK",
-                           "UNIQUE", "IDENTITY", "NOT", "NULL", "SCHEMA", "NOLOCK", "COUNT", "SUM",
-                           "AVG", "MIN", "MAX", "ISNULL", "COALESCE", "CONVERT", "CAST"]
-            let keywordColor = NSColor(red: 0.34, green: 0.65, blue: 1, alpha: 1)  // Blue
-
-            for keyword in keywords {
-                let pattern = "\\b\(keyword)\\b"
-                if let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) {
-                    let matches = regex.matches(in: text, range: fullRange)
-                    for match in matches {
-                        textView.textStorage?.addAttribute(.foregroundColor, value: keywordColor, range: match.range)
-                    }
-                }
-            }
-
-            // Strings — orange
-            let stringColor = NSColor(red: 0.85, green: 0.55, blue: 0.25, alpha: 1)
-            if let regex = try? NSRegularExpression(pattern: "'[^']*'", options: []) {
-                for match in regex.matches(in: text, range: fullRange) {
-                    textView.textStorage?.addAttribute(.foregroundColor, value: stringColor, range: match.range)
-                }
-            }
-
-            // Comments — green
-            let commentColor = NSColor(red: 0.33, green: 0.55, blue: 0.33, alpha: 1)
-            // Single-line comments
-            if let regex = try? NSRegularExpression(pattern: "--.*$", options: .anchorsMatchLines) {
-                for match in regex.matches(in: text, range: fullRange) {
-                    textView.textStorage?.addAttribute(.foregroundColor, value: commentColor, range: match.range)
-                }
-            }
-            // Multi-line comments
-            if let regex = try? NSRegularExpression(pattern: "/\\*[\\s\\S]*?\\*/", options: []) {
-                for match in regex.matches(in: text, range: fullRange) {
-                    textView.textStorage?.addAttribute(.foregroundColor, value: commentColor, range: match.range)
-                }
-            }
-
-            // Numbers — purple
-            let numberColor = NSColor(red: 0.7, green: 0.5, blue: 0.85, alpha: 1)
-            if let regex = try? NSRegularExpression(pattern: "\\b\\d+(\\.\\d+)?\\b", options: []) {
-                for match in regex.matches(in: text, range: fullRange) {
-                    textView.textStorage?.addAttribute(.foregroundColor, value: numberColor, range: match.range)
+            // Debounce: highlight 100ms after user stops typing
+            highlightTimer?.invalidate()
+            highlightTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak textView] _ in
+                guard let tv = textView else { return }
+                DispatchQueue.main.async {
+                    SQLHighlighter.highlight(tv)
                 }
             }
         }
