@@ -51,7 +51,7 @@ class AppState: ObservableObject {
                     name: db.databaseName,
                     database: db.databaseName,
                     objectType: .database,
-                    isExpandable: true
+                    isExpandable: false  // Only expandable when connected
                 )
                 // Store the full server FQDN for connection later
                 dbNode.serverFqdn = db.serverFqdn
@@ -96,6 +96,7 @@ class AppState: ObservableObject {
             let connId = try await connectionManager.connect(info)
             node.connectionId = connId
             node.isConnected = true
+            node.isExpandable = true  // Now expandable with schema
             activeConnectionId = connId
             currentDatabase = node.name
             statusMessage = "Connected to \(node.name)"
@@ -113,6 +114,9 @@ class AppState: ObservableObject {
         guard let connId = node.connectionId, node.isConnected else { return }
         connectionManager.disconnect(connId)
         node.isConnected = false
+        node.isExpandable = false
+        node.isLoaded = false
+        node.children.removeAll()
         node.connectionId = nil
         statusMessage = "Disconnected from \(node.name)"
 

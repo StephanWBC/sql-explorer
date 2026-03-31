@@ -23,7 +23,7 @@ class DatabaseObject: Identifiable, ObservableObject {
     var database: String
     var connectionId: UUID?
     var objectType: DatabaseObjectType
-    var isExpandable: Bool
+    @Published var isExpandable: Bool
     @Published var isLoaded: Bool = false
     @Published var isConnected: Bool = false
     @Published var isConnecting: Bool = false
