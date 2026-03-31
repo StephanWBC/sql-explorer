@@ -9,6 +9,12 @@ struct ObjectExplorerRow: View {
     var onNewQuery: ((DatabaseObject) -> Void)?
     var onExpand: ((DatabaseObject) -> Void)?
 
+    @State private var showingNewGroup = false
+    @State private var newGroupName = ""
+    @State private var showingAliasPrompt = false
+    @State private var aliasText = ""
+    @State private var pendingGroupId: UUID?
+
     var body: some View {
         HStack(spacing: 5) {
             // Connection status dot for databases
@@ -114,17 +120,54 @@ struct ObjectExplorerRow: View {
                           systemImage: isFavorite ? "star.slash" : "star.fill")
                 }
 
-                // Add to group submenu
-                if !userDataStore.groups.isEmpty {
-                    Menu("Add to Group") {
-                        ForEach(userDataStore.groups) { group in
-                            Button(group.name) {
-                                addToGroup(group)
-                            }
+                // Add to group — always available, with "New Group" option
+                Menu("Add to Group") {
+                    ForEach(userDataStore.groups) { group in
+                        Button(group.name) {
+                            pendingGroupId = group.id
+                            aliasText = node.name
+                            showingAliasPrompt = true
                         }
+                    }
+                    if !userDataStore.groups.isEmpty { Divider() }
+                    Button("New Group...") {
+                        showingNewGroup = true
                     }
                 }
             }
+        }
+        .alert("New Group", isPresented: $showingNewGroup) {
+            TextField("Group name", text: $newGroupName)
+            Button("Create") {
+                let name = newGroupName.trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty else { return }
+                let group = userDataStore.addGroup(name: name)
+                pendingGroupId = group.id
+                aliasText = node.name
+                newGroupName = ""
+                // Show alias prompt next
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    showingAliasPrompt = true
+                }
+            }
+            Button("Cancel", role: .cancel) { newGroupName = "" }
+        } message: {
+            Text("Create a new group and add \(node.name) to it.")
+        }
+        .alert("Alias", isPresented: $showingAliasPrompt) {
+            TextField("Alias (e.g. BLMS Dev)", text: $aliasText)
+            Button("Add") {
+                guard let groupId = pendingGroupId else { return }
+                addToGroupWithAlias(groupId: groupId, alias: aliasText)
+                aliasText = ""
+                pendingGroupId = nil
+            }
+            Button("Cancel", role: .cancel) {
+                aliasText = ""
+                pendingGroupId = nil
+            }
+        } message: {
+            Text("Give \(node.name) an alias in this group (optional).")
         }
     }
 
@@ -142,12 +185,17 @@ struct ObjectExplorerRow: View {
     }
 
     private func addToGroup(_ group: DatabaseGroup) {
+        addToGroupWithAlias(groupId: group.id, alias: node.name)
+    }
+
+    private func addToGroupWithAlias(groupId: UUID, alias: String) {
         guard let fqdn = node.serverFqdn ?? findServerFqdn() else { return }
         let sub = appState.authService.selectedSubscription
+        let finalAlias = alias.trimmingCharacters(in: .whitespaces).isEmpty ? node.name : alias.trimmingCharacters(in: .whitespaces)
         userDataStore.addToGroup(
-            groupId: group.id, databaseName: node.name, serverFqdn: fqdn,
+            groupId: groupId, databaseName: node.name, serverFqdn: fqdn,
             subscriptionId: sub?.id ?? "", subscriptionName: sub?.name ?? "",
-            alias: node.name)
+            alias: finalAlias)
     }
 
     private func findServerFqdn() -> String? {
