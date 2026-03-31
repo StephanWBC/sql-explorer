@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Shared cache of database schema for IntelliSense completions
 @MainActor
@@ -47,15 +48,24 @@ class SchemaCache: ObservableObject {
 
 /// Static completion list accessible from any thread (for NSTextView delegate)
 enum CompletionProvider {
-    /// Thread-safe snapshot of completions — set from main thread, read from any
-    nonisolated(unsafe) static var completions: [String] = []
+    /// Lock-protected storage — never access directly, use `completions` accessor
+    nonisolated(unsafe) private static var _completions: [String] = []
+    nonisolated(unsafe) private static var _lock = os_unfair_lock()
+
+    /// Thread-safe read access to the completion list
+    static var completions: [String] {
+        os_unfair_lock_lock(&_lock)
+        let snapshot = _completions
+        os_unfair_lock_unlock(&_lock)
+        return snapshot
+    }
 
     /// Keywords + schema objects combined
     @MainActor
     static func rebuild(schema: SchemaCache) {
         var items: [String] = []
 
-        // SQL keywords (lowercase for nicer display)
+        // SQL keywords
         items.append(contentsOf: sqlKeywords.map { $0.uppercased() })
 
         // Schema objects
@@ -64,6 +74,10 @@ enum CompletionProvider {
         items.append(contentsOf: schema.storedProcedures)
         items.append(contentsOf: schema.functions)
 
-        completions = items.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        let sorted = items.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+
+        os_unfair_lock_lock(&_lock)
+        _completions = sorted
+        os_unfair_lock_unlock(&_lock)
     }
 }

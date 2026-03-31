@@ -205,36 +205,51 @@ private enum SQLHighlighter {
     static let numberRegex = try! NSRegularExpression(pattern: "\\b\\d+(\\.\\d+)?\\b")
 
     static func highlight(_ textView: NSTextView) {
-        guard let storage = textView.textStorage else { return }
+        guard let storage = textView.textStorage, let layoutManager = textView.layoutManager,
+              let textContainer = textView.textContainer else { return }
         let text = textView.string
-        let fullRange = NSRange(location: 0, length: text.utf16.count)
-        guard fullRange.length > 0 else { return }
+        let fullLength = text.utf16.count
+        guard fullLength > 0 else { return }
+
+        // Determine visible range + buffer for context (handles partially visible multi-line comments)
+        var highlightRange: NSRange
+        if let scrollView = textView.enclosingScrollView {
+            let visibleRect = scrollView.contentView.bounds
+            let glyphRange = layoutManager.glyphRange(forBoundingRect: visibleRect, in: textContainer)
+            let charRange = layoutManager.characterRange(forGlyphRange: glyphRange, actualGlyphRange: nil)
+            // Expand by 500 chars in each direction for context (multi-line comments, etc.)
+            let bufferStart = max(0, charRange.location - 500)
+            let bufferEnd = min(fullLength, charRange.location + charRange.length + 500)
+            highlightRange = NSRange(location: bufferStart, length: bufferEnd - bufferStart)
+        } else {
+            highlightRange = NSRange(location: 0, length: fullLength)
+        }
 
         storage.beginEditing()
 
-        // Reset all to default
-        storage.addAttribute(.foregroundColor, value: defaultColor, range: fullRange)
+        // Reset visible range to default
+        storage.addAttribute(.foregroundColor, value: defaultColor, range: highlightRange)
 
         // Keywords (single regex with alternation — 1 pass instead of 47)
-        for match in keywordRegex.matches(in: text, range: fullRange) {
+        for match in keywordRegex.matches(in: text, range: highlightRange) {
             storage.addAttribute(.foregroundColor, value: keywordColor, range: match.range)
         }
 
         // Strings
-        for match in stringRegex.matches(in: text, range: fullRange) {
+        for match in stringRegex.matches(in: text, range: highlightRange) {
             storage.addAttribute(.foregroundColor, value: stringColor, range: match.range)
         }
 
         // Comments override everything
-        for match in singleCommentRegex.matches(in: text, range: fullRange) {
+        for match in singleCommentRegex.matches(in: text, range: highlightRange) {
             storage.addAttribute(.foregroundColor, value: commentColor, range: match.range)
         }
-        for match in multiCommentRegex.matches(in: text, range: fullRange) {
+        for match in multiCommentRegex.matches(in: text, range: highlightRange) {
             storage.addAttribute(.foregroundColor, value: commentColor, range: match.range)
         }
 
         // Numbers
-        for match in numberRegex.matches(in: text, range: fullRange) {
+        for match in numberRegex.matches(in: text, range: highlightRange) {
             storage.addAttribute(.foregroundColor, value: numberColor, range: match.range)
         }
 
@@ -299,63 +314,85 @@ struct SQLTextEditor: NSViewRepresentable {
     class Coordinator: NSObject, NSTextViewDelegate {
         var text: Binding<String>
         private var highlightTimer: Timer?
+        private var completionTimer: Timer?
 
         init(text: Binding<String>) {
             self.text = text
+        }
+
+        deinit {
+            highlightTimer?.invalidate()
+            completionTimer?.invalidate()
         }
 
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             text.wrappedValue = textView.string
 
-            // Debounce: highlight 100ms after user stops typing
+            // Debounce syntax highlighting (fires on main run loop — no async dispatch needed)
             highlightTimer?.invalidate()
-            highlightTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: false) { [weak textView] _ in
-                guard let tv = textView else { return }
-                DispatchQueue.main.async {
-                    SQLHighlighter.highlight(tv)
-                }
+            highlightTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak textView] _ in
+                guard let tv = textView, tv.window != nil else { return }
+                SQLHighlighter.highlight(tv)
             }
 
-            // Auto-trigger completion after typing 2+ characters of a word
-            let range = textView.selectedRange()
-            if range.length == 0 && range.location > 0 {
-                let text = textView.string as NSString
-                // Walk back to find word start (including dots for schema.table)
-                var wordStart = range.location
-                while wordStart > 0 {
-                    let ch = text.character(at: wordStart - 1)
+            // Debounce completion — only trigger after 400ms pause, and only if 3+ chars typed
+            completionTimer?.invalidate()
+            completionTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak textView] _ in
+                guard let tv = textView, tv.window != nil else { return }
+                let range = tv.selectedRange()
+                guard range.length == 0, range.location > 0 else { return }
+                let str = tv.string as NSString
+                let strLen = str.length
+                guard range.location <= strLen else { return }
+                var start = range.location
+                while start > 0 {
+                    let ch = str.character(at: start - 1)
                     let c = Character(UnicodeScalar(ch)!)
-                    if c.isLetter || c.isNumber || c == "_" || c == "." {
-                        wordStart -= 1
-                    } else {
-                        break
-                    }
+                    if c.isLetter || c.isNumber || c == "_" || c == "." { start -= 1 }
+                    else { break }
                 }
-                let wordLen = range.location - wordStart
-                if wordLen >= 2 {
-                    textView.complete(nil)  // Trigger macOS completion popup
+                if range.location - start >= 3 {
+                    MainActor.assumeIsolated {
+                        tv.complete(nil)
+                    }
                 }
             }
         }
 
-        // NSTextView completion delegate method
+        // NSTextView completion delegate — returns matching suggestions
         func textView(_ textView: NSTextView, completions words: [String],
                       forPartialWordRange charRange: NSRange, indexOfSelectedItem index: UnsafeMutablePointer<Int>?) -> [String] {
 
+            guard charRange.length > 0 else { return [] }
             let partial = (textView.string as NSString).substring(with: charRange).lowercased()
-            guard partial.count >= 1 else { return [] }
+            guard partial.count >= 2 else { return [] }
 
-            // Filter completions matching the partial word
-            let matches = CompletionProvider.completions.filter {
-                $0.lowercased().hasPrefix(partial) || $0.lowercased().contains(partial)
+            let allCompletions = CompletionProvider.completions
+            guard !allCompletions.isEmpty else { return [] }
+
+            // Prefix matches first (most relevant), then contains
+            var results: [String] = []
+            var seen = Set<String>()
+
+            for item in allCompletions {
+                if item.lowercased().hasPrefix(partial) && seen.insert(item).inserted {
+                    results.append(item)
+                }
+                if results.count >= 15 { break }
             }
 
-            // Prefix matches first, then contains matches
-            let prefixMatches = matches.filter { $0.lowercased().hasPrefix(partial) }
-            let containsMatches = matches.filter { !$0.lowercased().hasPrefix(partial) }
+            if results.count < 15 {
+                for item in allCompletions {
+                    if !item.lowercased().hasPrefix(partial) && item.lowercased().contains(partial) && seen.insert(item).inserted {
+                        results.append(item)
+                    }
+                    if results.count >= 15 { break }
+                }
+            }
 
-            return Array((prefixMatches + containsMatches).prefix(20))
+            index?.pointee = -1  // No pre-selection
+            return results
         }
     }
 }
@@ -363,7 +400,7 @@ struct SQLTextEditor: NSViewRepresentable {
 // MARK: - NSTextView subclass with custom word boundary (includes dots for schema.table)
 
 class CompletingTextView: NSTextView {
-    // Custom word range for completion — includes dots for schema.table
+    // Custom word range — includes dots for schema.table (e.g. "BLMS.Lead")
     override var rangeForUserCompletion: NSRange {
         let cursorLocation = selectedRange().location
         let text = string as NSString
@@ -372,13 +409,19 @@ class CompletingTextView: NSTextView {
         while start > 0 {
             let ch = text.character(at: start - 1)
             let c = Character(UnicodeScalar(ch)!)
-            if c.isLetter || c.isNumber || c == "_" || c == "." {
-                start -= 1
-            } else {
-                break
-            }
+            if c.isLetter || c.isNumber || c == "_" || c == "." { start -= 1 }
+            else { break }
         }
 
         return NSRange(location: start, length: cursorLocation - start)
+    }
+
+    // Ctrl+Space to manually trigger completion (like SSMS)
+    override func keyDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control) && event.charactersIgnoringModifiers == " " {
+            complete(nil)
+            return
+        }
+        super.keyDown(with: event)
     }
 }
