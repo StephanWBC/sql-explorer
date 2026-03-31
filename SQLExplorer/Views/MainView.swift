@@ -43,7 +43,12 @@ struct MainView: View {
                     .frame(maxWidth: .infinity)
                 } else {
                     List(appState.explorerNodes, children: \.optionalChildren) { node in
-                        ObjectExplorerRow(node: node)
+                        ObjectExplorerRow(
+                            node: node,
+                            onConnect: { db in Task { await appState.connectToDatabase(db) } },
+                            onDisconnect: { db in appState.disconnectFromDatabase(db) },
+                            onNewQuery: { db in appState.newQueryForDatabase(db) }
+                        )
                     }
                     .listStyle(.sidebar)
                 }

@@ -64,6 +64,92 @@ class AppState: ObservableObject {
         statusMessage = "\(databases.count) database(s) across \(grouped.count) server(s)"
     }
 
+    // MARK: - Database Connect / Disconnect
+
+    func connectToDatabase(_ node: DatabaseObject) async {
+        guard node.objectType == .database,
+              let serverFqdn = node.serverFqdn ?? findServerFqdn(for: node),
+              !node.isConnected else { return }
+
+        node.isConnecting = true
+        statusMessage = "Connecting to \(node.name)..."
+
+        // Get SQL access token
+        guard let sqlToken = await authService.getSQLToken() else {
+            statusMessage = "Failed to get SQL token for \(node.name)"
+            node.isConnecting = false
+            return
+        }
+
+        let info = ConnectionInfo(
+            name: "\(node.name) — \(serverFqdn)",
+            server: serverFqdn,
+            database: node.database.isEmpty ? node.name : node.database,
+            authType: .entraIdInteractive,
+            username: authService.userEmail,
+            password: sqlToken,
+            trustServerCertificate: true,
+            encrypt: true
+        )
+
+        do {
+            let connId = try await connectionManager.connect(info)
+            node.connectionId = connId
+            node.isConnected = true
+            activeConnectionId = connId
+            currentDatabase = node.name
+            statusMessage = "Connected to \(node.name)"
+        } catch {
+            statusMessage = "Failed: \(error.localizedDescription)"
+        }
+
+        node.isConnecting = false
+    }
+
+    func disconnectFromDatabase(_ node: DatabaseObject) {
+        guard let connId = node.connectionId, node.isConnected else { return }
+        connectionManager.disconnect(connId)
+        node.isConnected = false
+        node.connectionId = nil
+        statusMessage = "Disconnected from \(node.name)"
+
+        // If this was the active connection, clear it
+        if activeConnectionId == connId {
+            // Find another connected database
+            let connected = allDatabaseNodes().first { $0.isConnected }
+            activeConnectionId = connected?.connectionId
+            currentDatabase = connected?.name ?? ""
+        }
+    }
+
+    func newQueryForDatabase(_ node: DatabaseObject) {
+        guard let connId = node.connectionId, node.isConnected else { return }
+        let tab = QueryTab(
+            title: "\(node.name) — Query \(queryTabs.count + 1)",
+            connectionId: connId,
+            database: node.name
+        )
+        queryTabs.append(tab)
+        selectedTabId = tab.id
+        activeConnectionId = connId
+        currentDatabase = node.name
+    }
+
+    /// Find the server FQDN for a database node by walking up the tree
+    private func findServerFqdn(for node: DatabaseObject) -> String? {
+        for server in explorerNodes {
+            if server.children.contains(where: { $0.id == node.id }) {
+                return server.name + ".database.windows.net"
+            }
+        }
+        return nil
+    }
+
+    /// Get all database nodes from the tree
+    private func allDatabaseNodes() -> [DatabaseObject] {
+        explorerNodes.flatMap { $0.children.filter { $0.objectType == .database } }
+    }
+
     /// Add a server node (for manual connections)
     func addServerToExplorer(name: String, connectionId: UUID, groupId: UUID?, environmentLabel: String?) {
         let serverNode = DatabaseObject(
