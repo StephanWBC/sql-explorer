@@ -124,10 +124,10 @@ struct MainView: View {
 
     // MARK: - Explorer Content
 
-    private func handleReveal(_ nodeId: UUID?) {
+    private func handleReveal(_ nodeId: UUID?, scrollProxy: ScrollViewProxy? = nil) {
         guard let nodeId else { return }
 
-        // Expand parent server
+        // Step 1: Expand parent server
         for server in appState.explorerNodes {
             if server.children.contains(where: { $0.id == nodeId }) {
                 expandedNodes.insert(server.id)
@@ -135,12 +135,19 @@ struct MainView: View {
             }
         }
 
-        // Expand the node itself after server children render
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+        // Step 2: Expand the node + scroll to it (after server children render)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             expandedNodes.insert(nodeId)
+
+            // Step 3: Scroll to the node (after it renders)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                withAnimation {
+                    scrollProxy?.scrollTo(nodeId, anchor: .center)
+                }
+            }
         }
 
-        // Clear highlight
+        // Clear highlight after 2.5 seconds
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
             appState.revealedNodeId = nil
         }
@@ -199,6 +206,7 @@ struct MainView: View {
                 }
                 .frame(maxWidth: .infinity)
             } else {
+                ScrollViewReader { scrollProxy in
                 List {
                     // Connected databases pinned at top
                     if !connectedDatabases.isEmpty {
@@ -296,12 +304,12 @@ struct MainView: View {
                 }
                 .listStyle(.sidebar)
                 .onAppear {
-                    // Handle pending reveal when explorer tab first mounts
-                    handleReveal(appState.revealedNodeId)
+                    handleReveal(appState.revealedNodeId, scrollProxy: scrollProxy)
                 }
                 .onChange(of: appState.revealedNodeId) { _, nodeId in
-                    handleReveal(nodeId)
+                    handleReveal(nodeId, scrollProxy: scrollProxy)
                 }
+                } // end ScrollViewReader
             }
         }
     }
