@@ -42,17 +42,6 @@ struct QueryEditorView: View {
                     .buttonStyle(.plain)
                     .help("Save query (⌘S)")
 
-                    // Close
-                    Button {
-                        appState.closeTab(tab.id)
-                    } label: {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Close tab (⌘W)")
-
                     if tab.isExecuting {
                         ProgressView()
                             .scaleEffect(0.5)
