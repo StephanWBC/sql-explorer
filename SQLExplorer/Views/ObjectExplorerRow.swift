@@ -24,12 +24,8 @@ struct ObjectExplorerRow: View {
                     .frame(width: 7, height: 7)
             }
 
-            // Server status dot
-            if node.objectType == .server {
-                Circle()
-                    .fill(hasConnectedChild ? Color.green : Color.gray.opacity(0.3))
-                    .frame(width: 7, height: 7)
-            }
+            // Server status dot — only outside DisclosureGroup context
+            // (DisclosureGroup in MainView handles server expand, so skip dot there)
 
             // Icon
             Image(systemName: node.icon)
