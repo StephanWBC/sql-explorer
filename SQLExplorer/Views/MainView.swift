@@ -171,7 +171,9 @@ struct MainView: View {
                                     }
                                     Divider()
                                     Button {
-                                        // Already on Explorer tab, just scroll context
+                                        if let fqdn = db.serverFqdn {
+                                            appState.revealInExplorer(databaseName: db.name, serverFqdn: fqdn)
+                                        }
                                     } label: {
                                         Label("Show in Explorer", systemImage: "sidebar.left")
                                     }
@@ -202,6 +204,9 @@ struct MainView: View {
                                     Task { await appState.loadSchemaForDatabase(db) }
                                 }
                             )
+                            .id(node.id)
+                            .background(appState.revealedNodeId == node.id ? Color.accentColor.opacity(0.2) : Color.clear)
+                            .cornerRadius(4)
                         }
                     } header: {
                         Text("ALL DATABASES")
@@ -211,6 +216,14 @@ struct MainView: View {
                     }
                 }
                 .listStyle(.sidebar)
+                .onChange(of: appState.revealedNodeId) { _, nodeId in
+                    // Clear highlight after 2 seconds
+                    if nodeId != nil {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            appState.revealedNodeId = nil
+                        }
+                    }
+                }
             }
         }
     }

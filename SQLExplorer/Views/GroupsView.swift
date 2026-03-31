@@ -92,6 +92,7 @@ struct GroupsView: View {
                                         Divider()
 
                                         Button {
+                                            appState.revealInExplorer(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
                                             selectedSidebarTab = .explorer
                                         } label: {
                                             Label("Show in Explorer", systemImage: "sidebar.left")

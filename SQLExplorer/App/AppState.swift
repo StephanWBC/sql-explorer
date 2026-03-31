@@ -14,6 +14,7 @@ class AppState: ObservableObject {
     @Published var currentDatabase: String = ""
 
     @Published var explorerNodes: [DatabaseObject] = []
+    @Published var revealedNodeId: UUID?  // Set this to scroll to + expand a node
     @Published var queryTabs: [QueryTab] = []
     @Published var selectedTabId: UUID?
 
@@ -198,6 +199,13 @@ class AppState: ObservableObject {
     func disconnect(databaseName: String, serverFqdn: String) {
         guard let node = findExplorerNode(databaseName: databaseName, serverFqdn: serverFqdn) else { return }
         disconnectFromDatabase(node)
+    }
+
+    // MARK: - Reveal in Explorer
+
+    func revealInExplorer(databaseName: String, serverFqdn: String) {
+        guard let node = findExplorerNode(databaseName: databaseName, serverFqdn: serverFqdn) else { return }
+        revealedNodeId = node.id
     }
 
     // MARK: - Helpers
