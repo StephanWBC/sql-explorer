@@ -111,6 +111,13 @@ struct MainView: View {
 
     // MARK: - Explorer Content
 
+    /// All currently connected database nodes
+    private var connectedDatabases: [DatabaseObject] {
+        appState.explorerNodes.flatMap { server in
+            server.children.filter { $0.objectType == .database && $0.isConnected }
+        }
+    }
+
     private var explorerContent: some View {
         Group {
             if appState.explorerNodes.isEmpty {
@@ -126,18 +133,76 @@ struct MainView: View {
                 }
                 .frame(maxWidth: .infinity)
             } else {
-                List(appState.explorerNodes, children: \.optionalChildren) { node in
-                    ObjectExplorerRow(
-                        node: node,
-                        userDataStore: appState.userDataStore,
-                        onConnect: { db in Task { await appState.connectToDatabase(db) } },
-                        onDisconnect: { db in appState.disconnectFromDatabase(db) },
-                        onNewQuery: { db in appState.newQueryForDatabase(db) },
-                        onExpand: { db in
-                            db.isLoaded = false
-                            Task { await appState.loadSchemaForDatabase(db) }
+                List {
+                    // Connected databases pinned at top
+                    if !connectedDatabases.isEmpty {
+                        Section {
+                            ForEach(connectedDatabases) { db in
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(.green)
+                                        .frame(width: 7, height: 7)
+                                    Image(systemName: "cylinder")
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.green)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(db.name)
+                                            .font(.system(size: 12, weight: .medium))
+                                        if let fqdn = db.serverFqdn {
+                                            Text(fqdn.replacingOccurrences(of: ".database.windows.net", with: ""))
+                                                .font(.system(size: 10))
+                                                .foregroundStyle(.tertiary)
+                                        }
+                                    }
+                                    Spacer()
+                                }
+                                .padding(.vertical, 1)
+                                .contextMenu {
+                                    Button {
+                                        appState.newQueryForDatabase(db)
+                                    } label: {
+                                        Label("New Query", systemImage: "plus.rectangle")
+                                    }
+                                    Divider()
+                                    Button {
+                                        appState.disconnectFromDatabase(db)
+                                    } label: {
+                                        Label("Disconnect", systemImage: "bolt.slash")
+                                    }
+                                }
+                                .onTapGesture(count: 2) {
+                                    appState.newQueryForDatabase(db)
+                                }
+                            }
+                        } header: {
+                            Text("CONNECTED")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.green)
+                                .tracking(1)
                         }
-                    )
+                    }
+
+                    // Full server/database tree
+                    Section {
+                        OutlineGroup(appState.explorerNodes, children: \.optionalChildren) { node in
+                            ObjectExplorerRow(
+                                node: node,
+                                userDataStore: appState.userDataStore,
+                                onConnect: { db in Task { await appState.connectToDatabase(db) } },
+                                onDisconnect: { db in appState.disconnectFromDatabase(db) },
+                                onNewQuery: { db in appState.newQueryForDatabase(db) },
+                                onExpand: { db in
+                                    db.isLoaded = false
+                                    Task { await appState.loadSchemaForDatabase(db) }
+                                }
+                            )
+                        }
+                    } header: {
+                        Text("ALL DATABASES")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .tracking(1)
+                    }
                 }
                 .listStyle(.sidebar)
             }
