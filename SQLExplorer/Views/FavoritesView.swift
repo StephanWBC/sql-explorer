@@ -50,8 +50,10 @@ struct FavoritesView: View {
                         Divider()
 
                         Button {
-                            appState.revealInExplorer(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn)
                             selectedSidebarTab = .explorer
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                appState.revealInExplorer(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn)
+                            }
                         } label: {
                             Label("Show in Explorer", systemImage: "sidebar.left")
                         }

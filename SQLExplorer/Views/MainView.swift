@@ -124,6 +124,28 @@ struct MainView: View {
 
     // MARK: - Explorer Content
 
+    private func handleReveal(_ nodeId: UUID?) {
+        guard let nodeId else { return }
+
+        // Expand parent server
+        for server in appState.explorerNodes {
+            if server.children.contains(where: { $0.id == nodeId }) {
+                expandedNodes.insert(server.id)
+                break
+            }
+        }
+
+        // Expand the node itself after server children render
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            expandedNodes.insert(nodeId)
+        }
+
+        // Clear highlight
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+            appState.revealedNodeId = nil
+        }
+    }
+
     private func expandedBinding(_ id: UUID) -> Binding<Bool> {
         Binding(
             get: { expandedNodes.contains(id) },
@@ -273,26 +295,12 @@ struct MainView: View {
                     }
                 }
                 .listStyle(.sidebar)
+                .onAppear {
+                    // Handle pending reveal when explorer tab first mounts
+                    handleReveal(appState.revealedNodeId)
+                }
                 .onChange(of: appState.revealedNodeId) { _, nodeId in
-                    if let nodeId {
-                        // Step 1: Expand parent server FIRST so children render
-                        for server in appState.explorerNodes {
-                            if server.children.contains(where: { $0.id == nodeId }) {
-                                expandedNodes.insert(server.id)
-                                break
-                            }
-                        }
-
-                        // Step 2: On next frame, expand the database node itself
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            expandedNodes.insert(nodeId)
-                        }
-
-                        // Clear highlight after 2.5 seconds
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                            appState.revealedNodeId = nil
-                        }
-                    }
+                    handleReveal(nodeId)
                 }
             }
         }

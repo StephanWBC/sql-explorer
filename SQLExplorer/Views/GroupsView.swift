@@ -92,8 +92,11 @@ struct GroupsView: View {
                                         Divider()
 
                                         Button {
-                                            appState.revealInExplorer(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+                                            // Switch tab FIRST, then reveal after view mounts
                                             selectedSidebarTab = .explorer
+                                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                                appState.revealInExplorer(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+                                            }
                                         } label: {
                                             Label("Show in Explorer", systemImage: "sidebar.left")
                                         }
