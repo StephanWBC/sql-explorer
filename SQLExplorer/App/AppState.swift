@@ -8,6 +8,7 @@ class AppState: ObservableObject {
     let authService = AuthService()
     let queryService = QueryExecutionService()
     let explorerService = ObjectExplorerService()
+    let userDataStore = UserDataStore()
 
     @Published var activeConnectionId: UUID?
     @Published var statusMessage: String = "Ready"
@@ -224,6 +225,46 @@ class AppState: ObservableObject {
         node.children = [tablesFolder, viewsFolder, procsFolder, funcsFolder]
         node.isLoaded = true
         objectWillChange.send()
+    }
+
+    // MARK: - Connect from Favorites / Groups
+
+    func connectToFavorite(_ fav: FavoriteDatabase) async {
+        // Find the database node in explorer, or create a temporary one
+        let node = findOrCreateDatabaseNode(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn)
+        await connectToDatabase(node)
+    }
+
+    func connectToGroupMember(_ member: GroupMember) async {
+        let node = findOrCreateDatabaseNode(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+        await connectToDatabase(node)
+    }
+
+    func newQueryForFavorite(_ fav: FavoriteDatabase) {
+        let node = findOrCreateDatabaseNode(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn)
+        if node.isConnected {
+            newQueryForDatabase(node)
+        }
+    }
+
+    func newQueryForGroupMember(_ member: GroupMember) {
+        let node = findOrCreateDatabaseNode(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+        if node.isConnected {
+            newQueryForDatabase(node)
+        }
+    }
+
+    private func findOrCreateDatabaseNode(databaseName: String, serverFqdn: String) -> DatabaseObject {
+        // Search existing explorer nodes
+        for server in explorerNodes {
+            if let db = server.children.first(where: { $0.name == databaseName && $0.serverFqdn == serverFqdn }) {
+                return db
+            }
+        }
+        // Create a temporary node
+        let node = DatabaseObject(name: databaseName, database: databaseName, objectType: .database)
+        node.serverFqdn = serverFqdn
+        return node
     }
 
     /// Add a server node (for manual connections)

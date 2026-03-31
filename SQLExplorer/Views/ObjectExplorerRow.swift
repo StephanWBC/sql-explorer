@@ -2,13 +2,14 @@ import SwiftUI
 
 struct ObjectExplorerRow: View {
     @ObservedObject var node: DatabaseObject
+    @EnvironmentObject var appState: AppState
     var onConnect: ((DatabaseObject) -> Void)?
     var onDisconnect: ((DatabaseObject) -> Void)?
     var onNewQuery: ((DatabaseObject) -> Void)?
     var onExpand: ((DatabaseObject) -> Void)?
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             // Connection status dot for databases
             if node.objectType == .database {
                 Circle()
@@ -16,7 +17,7 @@ struct ObjectExplorerRow: View {
                     .frame(width: 7, height: 7)
             }
 
-            // Server status dot (green if any child connected)
+            // Server status dot
             if node.objectType == .server {
                 Circle()
                     .fill(hasConnectedChild ? Color.green : Color.gray.opacity(0.3))
@@ -25,14 +26,14 @@ struct ObjectExplorerRow: View {
 
             // Icon
             Image(systemName: node.icon)
-                .font(.system(size: 12))
+                .font(.system(size: 11))
                 .foregroundStyle(iconColor)
-                .frame(width: 16)
+                .frame(width: 14)
 
             // Name
             Text(node.name)
                 .font(.system(size: 12, weight: isGroupOrServer ? .semibold : .regular))
-                .foregroundStyle(node.isConnected ? .primary : .secondary)
+                .foregroundStyle(node.isConnected || node.objectType == .server ? .primary : .secondary)
                 .lineLimit(1)
 
             // Connecting spinner
@@ -43,10 +44,22 @@ struct ObjectExplorerRow: View {
             }
 
             Spacer()
+
+            // Star button for databases
+            if node.objectType == .database {
+                Button {
+                    toggleFavorite()
+                } label: {
+                    Image(systemName: isFavorite ? "star.fill" : "star")
+                        .font(.system(size: 10))
+                        .foregroundStyle(isFavorite ? .yellow : .gray.opacity(0.3))
+                }
+                .buttonStyle(.plain)
+                .help(isFavorite ? "Remove from favorites" : "Add to favorites")
+            }
         }
         .padding(.vertical, 1)
         .onAppear {
-            // When a connected database row appears and hasn't loaded schema yet, trigger load
             if node.objectType == .database && node.isConnected && !node.isLoaded && node.children.isEmpty {
                 onExpand?(node)
             }
@@ -89,8 +102,60 @@ struct ObjectExplorerRow: View {
                         Label("Connect", systemImage: "bolt.fill")
                     }
                 }
+
+                Divider()
+
+                // Favorite toggle
+                Button {
+                    toggleFavorite()
+                } label: {
+                    Label(isFavorite ? "Remove from Favorites" : "Add to Favorites",
+                          systemImage: isFavorite ? "star.slash" : "star.fill")
+                }
+
+                // Add to group submenu
+                if !appState.userDataStore.groups.isEmpty {
+                    Menu("Add to Group") {
+                        ForEach(appState.userDataStore.groups) { group in
+                            Button(group.name) {
+                                addToGroup(group)
+                            }
+                        }
+                    }
+                }
             }
         }
+    }
+
+    private var isFavorite: Bool {
+        guard let fqdn = node.serverFqdn ?? findServerFqdn() else { return false }
+        return appState.userDataStore.isFavorite(databaseName: node.name, serverFqdn: fqdn)
+    }
+
+    private func toggleFavorite() {
+        guard let fqdn = node.serverFqdn ?? findServerFqdn() else { return }
+        let sub = appState.authService.selectedSubscription
+        appState.userDataStore.toggleFavorite(
+            databaseName: node.name, serverFqdn: fqdn,
+            subscriptionId: sub?.id ?? "", subscriptionName: sub?.name ?? "")
+    }
+
+    private func addToGroup(_ group: DatabaseGroup) {
+        guard let fqdn = node.serverFqdn ?? findServerFqdn() else { return }
+        let sub = appState.authService.selectedSubscription
+        appState.userDataStore.addToGroup(
+            groupId: group.id, databaseName: node.name, serverFqdn: fqdn,
+            subscriptionId: sub?.id ?? "", subscriptionName: sub?.name ?? "",
+            alias: node.name)
+    }
+
+    private func findServerFqdn() -> String? {
+        for server in appState.explorerNodes {
+            if server.children.contains(where: { $0.id == node.id }) {
+                return server.name + ".database.windows.net"
+            }
+        }
+        return nil
     }
 
     private var hasConnectedChild: Bool {

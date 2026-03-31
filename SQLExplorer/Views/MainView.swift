@@ -1,68 +1,62 @@
 import SwiftUI
 
+enum SidebarTab: String, CaseIterable {
+    case explorer = "Explorer"
+    case favorites = "Favorites"
+    case groups = "Groups"
+
+    var icon: String {
+        switch self {
+        case .explorer: return "cylinder.split.1x2"
+        case .favorites: return "star.fill"
+        case .groups: return "folder.fill"
+        }
+    }
+}
+
 struct MainView: View {
     @EnvironmentObject var appState: AppState
-    // No toolbar — all actions via sidebar or keyboard shortcuts
-    @State private var explorerWidth: CGFloat = 260
+    @State private var explorerWidth: CGFloat = 280
+    @State private var selectedSidebarTab: SidebarTab = .explorer
 
     var body: some View {
         HSplitView {
-            // Left: Object Explorer
+            // Left: Sidebar
             VStack(spacing: 0) {
-                // Account banner — always visible, observes authService directly
+                // Account banner
                 AccountBannerView(authService: appState.authService)
 
                 Divider()
 
-                // Explorer header
-                HStack {
-                    Text("EXPLORER")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .tracking(1.5)
-                    Spacer()
+                // Sidebar tab picker
+                Picker("", selection: $selectedSidebarTab) {
+                    ForEach(SidebarTab.allCases, id: \.self) { tab in
+                        Label(tab.rawValue, systemImage: tab.icon).tag(tab)
+                    }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(.bar)
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
 
                 Divider()
 
-                // Tree view
-                if appState.explorerNodes.isEmpty {
-                    VStack(spacing: 8) {
-                        Spacer()
-                        Image(systemName: "cylinder")
-                            .font(.system(size: 32))
-                            .foregroundStyle(.quaternary)
-                        Text("No connections")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                    }
-                    .frame(maxWidth: .infinity)
-                } else {
-                    List(appState.explorerNodes, children: \.optionalChildren) { node in
-                        ObjectExplorerRow(
-                            node: node,
-                            onConnect: { db in Task { await appState.connectToDatabase(db) } },
-                            onDisconnect: { db in appState.disconnectFromDatabase(db) },
-                            onNewQuery: { db in appState.newQueryForDatabase(db) },
-                            onExpand: { db in
-                                db.isLoaded = false  // Force reload
-                                Task { await appState.loadSchemaForDatabase(db) }
-                            }
-                        )
-                    }
-                    .listStyle(.sidebar)
+                // Tab content
+                switch selectedSidebarTab {
+                case .explorer:
+                    explorerContent
+                case .favorites:
+                    FavoritesView(userDataStore: appState.userDataStore)
+                        .environmentObject(appState)
+                case .groups:
+                    GroupsView(userDataStore: appState.userDataStore)
+                        .environmentObject(appState)
                 }
             }
-            .frame(minWidth: 200, idealWidth: explorerWidth, maxWidth: 400)
+            .frame(minWidth: 220, idealWidth: explorerWidth, maxWidth: 450)
 
             // Right: Query editor area
             VStack(spacing: 0) {
                 if appState.queryTabs.isEmpty {
-                    // Empty state
                     VStack(spacing: 16) {
                         Image(systemName: "cylinder.split.1x2")
                             .font(.system(size: 48))
@@ -71,24 +65,20 @@ struct MainView: View {
                             .font(.title)
                             .fontWeight(.light)
                             .foregroundStyle(.secondary)
-                        Text("Connect to a server and open a new query tab.")
+                        Text("Double-click a database to connect, then open a query tab.")
                             .font(.subheadline)
                             .foregroundStyle(.tertiary)
                         HStack(spacing: 16) {
-                            Label("⌘N connect", systemImage: "")
+                            Text("⌘T new query")
                                 .font(.caption)
                                 .foregroundStyle(.quaternary)
-                            Label("⌘T new query", systemImage: "")
-                                .font(.caption)
-                                .foregroundStyle(.quaternary)
-                            Label("⌘↵ execute", systemImage: "")
+                            Text("⌘↵ execute")
                                 .font(.caption)
                                 .foregroundStyle(.quaternary)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    // Tab bar + editor
                     TabView(selection: $appState.selectedTabId) {
                         ForEach($appState.queryTabs) { $tab in
                             QueryEditorView(tab: $tab)
@@ -100,9 +90,7 @@ struct MainView: View {
             }
         }
         .toolbar(.hidden)
-        // Status bar
         .onAppear {
-            // Load explorer if databases already discovered
             if !appState.authService.databases.isEmpty && appState.explorerNodes.isEmpty {
                 appState.buildExplorerFromDatabases(appState.authService.databases)
             }
@@ -111,7 +99,6 @@ struct MainView: View {
             appState.buildExplorerFromDatabases(newDatabases)
         }
         .onReceive(appState.authService.$databases) { newDatabases in
-            // Belt-and-suspenders: also listen via Combine publisher
             if !newDatabases.isEmpty {
                 appState.buildExplorerFromDatabases(newDatabases)
             }
@@ -122,6 +109,39 @@ struct MainView: View {
         }
     }
 
+    // MARK: - Explorer Content
+
+    private var explorerContent: some View {
+        Group {
+            if appState.explorerNodes.isEmpty {
+                VStack(spacing: 8) {
+                    Spacer()
+                    Image(systemName: "cylinder")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.quaternary)
+                    Text("No databases")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                List(appState.explorerNodes, children: \.optionalChildren) { node in
+                    ObjectExplorerRow(
+                        node: node,
+                        onConnect: { db in Task { await appState.connectToDatabase(db) } },
+                        onDisconnect: { db in appState.disconnectFromDatabase(db) },
+                        onNewQuery: { db in appState.newQueryForDatabase(db) },
+                        onExpand: { db in
+                            db.isLoaded = false
+                            Task { await appState.loadSchemaForDatabase(db) }
+                        }
+                    )
+                }
+                .listStyle(.sidebar)
+            }
+        }
+    }
 }
 
 // MARK: - Make DatabaseObject work with List children
