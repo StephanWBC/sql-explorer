@@ -156,9 +156,25 @@ class AppState: ObservableObject {
 
     func newQueryForDatabase(_ node: DatabaseObject) {
         guard let connId = node.connectionId, node.isConnected else { return }
+
+        // Find server name
+        let serverName = node.serverFqdn?.replacingOccurrences(of: ".database.windows.net", with: "") ?? ""
+
+        // Find group alias if this database belongs to any group
+        var groupAlias = ""
+        for group in userDataStore.groups {
+            if let member = group.members.first(where: {
+                $0.databaseName == node.name && $0.serverFqdn == (node.serverFqdn ?? "")
+            }) {
+                groupAlias = "\(group.name) > \(member.alias)"
+                break
+            }
+        }
+
         let tab = QueryTab(
             title: "\(node.name) — Query \(queryTabs.count + 1)",
-            connectionId: connId, database: node.name)
+            connectionId: connId, database: node.name,
+            serverName: serverName, groupAlias: groupAlias)
         queryTabs.append(tab)
         selectedTabId = tab.id
         activeConnectionId = connId
@@ -344,6 +360,8 @@ struct QueryTab: Identifiable {
     var isExecuting: Bool = false
     var connectionId: UUID
     var database: String
+    var serverName: String = ""   // e.g. "wbcazsql01-development"
+    var groupAlias: String = ""   // e.g. "BLMS > Development"
     var isSaved: Bool = false
     var savedPath: URL?
 }

@@ -59,8 +59,31 @@ struct QueryEditorView: View {
                             .foregroundStyle(.secondary)
                     }
 
+                    // Group alias badge (if in a group)
+                    if !tab.groupAlias.isEmpty {
+                        Text(tab.groupAlias)
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.1))
+                            .cornerRadius(4)
+                    }
+
+                    // Server badge
+                    if !tab.serverName.isEmpty {
+                        Text(tab.serverName)
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.blue)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.blue.opacity(0.1))
+                            .cornerRadius(4)
+                    }
+
+                    // Database badge
                     Text(tab.database)
-                        .font(.system(size: 10, weight: .medium))
+                        .font(.system(size: 10, weight: .semibold))
                         .foregroundStyle(.green)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
