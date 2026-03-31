@@ -124,6 +124,63 @@ struct MainView: View {
 
     // MARK: - Explorer Content
 
+    @ViewBuilder
+    private func connectedDbLabel(_ db: DatabaseObject) -> some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(.green)
+                .frame(width: 7, height: 7)
+            Image(systemName: "cylinder")
+                .font(.system(size: 11))
+                .foregroundStyle(.green)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(db.name)
+                    .font(.system(size: 12, weight: .medium))
+                if let fqdn = db.serverFqdn {
+                    Text(fqdn.replacingOccurrences(of: ".database.windows.net", with: ""))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+            }
+            Spacer()
+        }
+        .contextMenu {
+            Button {
+                appState.newQueryForDatabase(db)
+            } label: {
+                Label("New Query", systemImage: "plus.rectangle")
+            }
+
+            Button {
+                db.isLoaded = false
+                Task { await appState.loadSchemaForDatabase(db) }
+            } label: {
+                Label("Refresh Schema", systemImage: "arrow.clockwise")
+            }
+
+            Divider()
+
+            Button {
+                appState.disconnectFromDatabase(db)
+            } label: {
+                Label("Disconnect", systemImage: "bolt.slash")
+            }
+
+            Divider()
+
+            Button {
+                if let fqdn = db.serverFqdn {
+                    appState.revealInExplorer(databaseName: db.name, serverFqdn: fqdn)
+                }
+            } label: {
+                Label("Show in Explorer", systemImage: "sidebar.left")
+            }
+        }
+        .onTapGesture(count: 2) {
+            appState.newQueryForDatabase(db)
+        }
+    }
+
     private func handleReveal(_ nodeId: UUID?, scrollProxy: ScrollViewProxy? = nil) {
         guard let nodeId else { return }
 
@@ -208,52 +265,30 @@ struct MainView: View {
             } else {
                 ScrollViewReader { scrollProxy in
                 List {
-                    // Connected databases pinned at top
+                    // Connected databases pinned at top — same expandable view as All Databases
                     if !connectedDatabases.isEmpty {
                         Section {
                             ForEach(connectedDatabases) { db in
-                                HStack(spacing: 6) {
-                                    Circle()
-                                        .fill(.green)
-                                        .frame(width: 7, height: 7)
-                                    Image(systemName: "cylinder")
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.green)
-                                    VStack(alignment: .leading, spacing: 1) {
-                                        Text(db.name)
-                                            .font(.system(size: 12, weight: .medium))
-                                        if let fqdn = db.serverFqdn {
-                                            Text(fqdn.replacingOccurrences(of: ".database.windows.net", with: ""))
-                                                .font(.system(size: 10))
-                                                .foregroundStyle(.tertiary)
-                                        }
-                                    }
-                                    Spacer()
-                                }
-                                .padding(.vertical, 1)
-                                .contextMenu {
-                                    Button {
-                                        appState.newQueryForDatabase(db)
-                                    } label: {
-                                        Label("New Query", systemImage: "plus.rectangle")
-                                    }
-                                    Divider()
-                                    Button {
-                                        appState.disconnectFromDatabase(db)
-                                    } label: {
-                                        Label("Disconnect", systemImage: "bolt.slash")
-                                    }
-                                    Divider()
-                                    Button {
-                                        if let fqdn = db.serverFqdn {
-                                            appState.revealInExplorer(databaseName: db.name, serverFqdn: fqdn)
+                                if db.isExpandable && !db.children.isEmpty {
+                                    DisclosureGroup(isExpanded: expandedBinding(db.id)) {
+                                        ForEach(db.children) { child in
+                                            if child.isExpandable && !child.children.isEmpty {
+                                                DisclosureGroup(isExpanded: expandedBinding(child.id)) {
+                                                    ForEach(child.children) { leaf in
+                                                        explorerRow(leaf)
+                                                    }
+                                                } label: {
+                                                    explorerRow(child)
+                                                }
+                                            } else {
+                                                explorerRow(child)
+                                            }
                                         }
                                     } label: {
-                                        Label("Show in Explorer", systemImage: "sidebar.left")
+                                        connectedDbLabel(db)
                                     }
-                                }
-                                .onTapGesture(count: 2) {
-                                    appState.newQueryForDatabase(db)
+                                } else {
+                                    connectedDbLabel(db)
                                 }
                             }
                         } header: {
