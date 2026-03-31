@@ -27,6 +27,7 @@ class DatabaseObject: Identifiable, ObservableObject {
     @Published var isLoaded: Bool = false
     @Published var isConnected: Bool = false
     @Published var isConnecting: Bool = false
+    @Published var isTreeExpanded: Bool = false
     @Published var children: [DatabaseObject] = []
     var groupId: UUID?
     var environmentLabel: String?

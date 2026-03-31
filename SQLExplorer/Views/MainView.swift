@@ -123,6 +123,24 @@ struct MainView: View {
 
     // MARK: - Explorer Content
 
+    @ViewBuilder
+    private func explorerRow(_ node: DatabaseObject) -> some View {
+        ObjectExplorerRow(
+            node: node,
+            userDataStore: appState.userDataStore,
+            onConnect: { db in Task { await appState.connectToDatabase(db) } },
+            onDisconnect: { db in appState.disconnectFromDatabase(db) },
+            onNewQuery: { db in appState.newQueryForDatabase(db) },
+            onExpand: { db in
+                db.isLoaded = false
+                Task { await appState.loadSchemaForDatabase(db) }
+            }
+        )
+        .id(node.id)
+        .background(appState.revealedNodeId == node.id ? Color.accentColor.opacity(0.2) : Color.clear)
+        .cornerRadius(4)
+    }
+
     /// All currently connected database nodes
     private var connectedDatabases: [DatabaseObject] {
         appState.explorerNodes.flatMap { server in
@@ -202,23 +220,40 @@ struct MainView: View {
                         }
                     }
 
-                    // Full server/database tree
+                    // Full server/database tree — DisclosureGroup for programmatic expand
                     Section {
-                        OutlineGroup(appState.explorerNodes, children: \.optionalChildren) { node in
-                            ObjectExplorerRow(
-                                node: node,
-                                userDataStore: appState.userDataStore,
-                                onConnect: { db in Task { await appState.connectToDatabase(db) } },
-                                onDisconnect: { db in appState.disconnectFromDatabase(db) },
-                                onNewQuery: { db in appState.newQueryForDatabase(db) },
-                                onExpand: { db in
-                                    db.isLoaded = false
-                                    Task { await appState.loadSchemaForDatabase(db) }
+                        ForEach(appState.explorerNodes) { server in
+                            DisclosureGroup(isExpanded: Binding(
+                                get: { server.isTreeExpanded },
+                                set: { server.isTreeExpanded = $0 }
+                            )) {
+                                ForEach(server.children) { db in
+                                    if db.isExpandable && !db.children.isEmpty {
+                                        DisclosureGroup(isExpanded: Binding(
+                                            get: { db.isTreeExpanded },
+                                            set: { db.isTreeExpanded = $0 }
+                                        )) {
+                                            ForEach(db.children) { child in
+                                                if child.isExpandable && !child.children.isEmpty {
+                                                    DisclosureGroup(child.name) {
+                                                        ForEach(child.children) { leaf in
+                                                            explorerRow(leaf)
+                                                        }
+                                                    }
+                                                } else {
+                                                    explorerRow(child)
+                                                }
+                                            }
+                                        } label: {
+                                            explorerRow(db)
+                                        }
+                                    } else {
+                                        explorerRow(db)
+                                    }
                                 }
-                            )
-                            .id(node.id)
-                            .background(appState.revealedNodeId == node.id ? Color.accentColor.opacity(0.2) : Color.clear)
-                            .cornerRadius(4)
+                            } label: {
+                                explorerRow(server)
+                            }
                         }
                     } header: {
                         Text("ALL DATABASES")
