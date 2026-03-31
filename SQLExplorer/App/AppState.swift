@@ -122,13 +122,14 @@ class AppState: ObservableObject {
             node.connectionId = connId
             node.isConnected = true
             node.isExpandable = true
-            // Trigger reveal to auto-expand in the tree
-            revealedNodeId = node.id
             activeConnectionId = connId
             currentDatabase = node.name
             statusMessage = "Connected to \(node.name)"
 
             await loadSchemaForDatabase(node)
+
+            // Auto-expand in explorer tree
+            revealedNodeId = node.id
         } catch {
             statusMessage = "Failed: \(error.localizedDescription)"
         }
@@ -222,19 +223,9 @@ class AppState: ObservableObject {
 
     func revealInExplorer(databaseName: String, serverFqdn: String) {
         guard let node = findExplorerNode(databaseName: databaseName, serverFqdn: serverFqdn) else { return }
-
-        // Expand the parent server node so the database is visible
-        for server in explorerNodes where server.children.contains(where: { $0.id == node.id }) {
-            server.isTreeExpanded = true
-        }
-
-        // If the database is connected, expand it too to show Tables/Views/etc
-        if node.isConnected {
-            node.isTreeExpanded = true
-        }
-
+        // Just set the revealedNodeId — the MainView onChange handler
+        // will expand the correct parent server + node in expandedNodes
         revealedNodeId = node.id
-        objectWillChange.send()
     }
 
     // MARK: - Helpers
