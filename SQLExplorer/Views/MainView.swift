@@ -129,6 +129,7 @@ struct MainView: View {
                 List(appState.explorerNodes, children: \.optionalChildren) { node in
                     ObjectExplorerRow(
                         node: node,
+                        userDataStore: appState.userDataStore,
                         onConnect: { db in Task { await appState.connectToDatabase(db) } },
                         onDisconnect: { db in appState.disconnectFromDatabase(db) },
                         onNewQuery: { db in appState.newQueryForDatabase(db) },

@@ -3,6 +3,7 @@ import SwiftUI
 struct ObjectExplorerRow: View {
     @ObservedObject var node: DatabaseObject
     @EnvironmentObject var appState: AppState
+    @ObservedObject var userDataStore: UserDataStore
     var onConnect: ((DatabaseObject) -> Void)?
     var onDisconnect: ((DatabaseObject) -> Void)?
     var onNewQuery: ((DatabaseObject) -> Void)?
@@ -114,9 +115,9 @@ struct ObjectExplorerRow: View {
                 }
 
                 // Add to group submenu
-                if !appState.userDataStore.groups.isEmpty {
+                if !userDataStore.groups.isEmpty {
                     Menu("Add to Group") {
-                        ForEach(appState.userDataStore.groups) { group in
+                        ForEach(userDataStore.groups) { group in
                             Button(group.name) {
                                 addToGroup(group)
                             }
@@ -129,13 +130,13 @@ struct ObjectExplorerRow: View {
 
     private var isFavorite: Bool {
         guard let fqdn = node.serverFqdn ?? findServerFqdn() else { return false }
-        return appState.userDataStore.isFavorite(databaseName: node.name, serverFqdn: fqdn)
+        return userDataStore.isFavorite(databaseName: node.name, serverFqdn: fqdn)
     }
 
     private func toggleFavorite() {
         guard let fqdn = node.serverFqdn ?? findServerFqdn() else { return }
         let sub = appState.authService.selectedSubscription
-        appState.userDataStore.toggleFavorite(
+        userDataStore.toggleFavorite(
             databaseName: node.name, serverFqdn: fqdn,
             subscriptionId: sub?.id ?? "", subscriptionName: sub?.name ?? "")
     }
@@ -143,7 +144,7 @@ struct ObjectExplorerRow: View {
     private func addToGroup(_ group: DatabaseGroup) {
         guard let fqdn = node.serverFqdn ?? findServerFqdn() else { return }
         let sub = appState.authService.selectedSubscription
-        appState.userDataStore.addToGroup(
+        userDataStore.addToGroup(
             groupId: group.id, databaseName: node.name, serverFqdn: fqdn,
             subscriptionId: sub?.id ?? "", subscriptionName: sub?.name ?? "",
             alias: node.name)
