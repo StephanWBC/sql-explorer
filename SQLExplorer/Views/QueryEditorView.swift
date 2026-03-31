@@ -248,8 +248,21 @@ struct SQLTextEditor: NSViewRepresentable {
     @Binding var text: String
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
-        let textView = scrollView.documentView as! NSTextView
+        // Create custom text view with completion support
+        let textView = CompletingTextView()
+        textView.minSize = NSSize(width: 0, height: 0)
+        textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.autoresizingMask = [.width]
+        textView.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
+        textView.textContainer?.widthTracksTextView = true
+
+        let scrollView = NSScrollView()
+        scrollView.documentView = textView
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
 
         textView.font = NSFont.monospacedSystemFont(ofSize: 14, weight: .regular)
         textView.isAutomaticQuoteSubstitutionEnabled = false
@@ -259,6 +272,7 @@ struct SQLTextEditor: NSViewRepresentable {
         textView.allowsUndo = true
         textView.usesFindBar = true
         textView.textContainerInset = NSSize(width: 8, height: 8)
+        textView.isAutomaticTextCompletionEnabled = true
         textView.delegate = context.coordinator
 
         textView.backgroundColor = NSColor(red: 0.05, green: 0.07, blue: 0.09, alpha: 1)
@@ -272,7 +286,7 @@ struct SQLTextEditor: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSScrollView, context: Context) {
-        let textView = nsView.documentView as! NSTextView
+        let textView = nsView.documentView as! CompletingTextView
         if textView.string != text {
             textView.string = text
         }
@@ -302,6 +316,69 @@ struct SQLTextEditor: NSViewRepresentable {
                     SQLHighlighter.highlight(tv)
                 }
             }
+
+            // Auto-trigger completion after typing 2+ characters of a word
+            let range = textView.selectedRange()
+            if range.length == 0 && range.location > 0 {
+                let text = textView.string as NSString
+                // Walk back to find word start (including dots for schema.table)
+                var wordStart = range.location
+                while wordStart > 0 {
+                    let ch = text.character(at: wordStart - 1)
+                    let c = Character(UnicodeScalar(ch)!)
+                    if c.isLetter || c.isNumber || c == "_" || c == "." {
+                        wordStart -= 1
+                    } else {
+                        break
+                    }
+                }
+                let wordLen = range.location - wordStart
+                if wordLen >= 2 {
+                    textView.complete(nil)  // Trigger macOS completion popup
+                }
+            }
         }
+
+        // NSTextView completion delegate method
+        func textView(_ textView: NSTextView, completions words: [String],
+                      forPartialWordRange charRange: NSRange, indexOfSelectedItem index: UnsafeMutablePointer<Int>?) -> [String] {
+
+            let partial = (textView.string as NSString).substring(with: charRange).lowercased()
+            guard partial.count >= 1 else { return [] }
+
+            // Filter completions matching the partial word
+            let matches = CompletionProvider.completions.filter {
+                $0.lowercased().hasPrefix(partial) || $0.lowercased().contains(partial)
+            }
+
+            // Prefix matches first, then contains matches
+            let prefixMatches = matches.filter { $0.lowercased().hasPrefix(partial) }
+            let containsMatches = matches.filter { !$0.lowercased().hasPrefix(partial) }
+
+            return Array((prefixMatches + containsMatches).prefix(20))
+        }
+    }
+}
+
+// MARK: - NSTextView subclass with custom word boundary (includes dots for schema.table)
+
+class CompletingTextView: NSTextView {
+    // Custom word range for completion — includes dots for schema.table
+    override var rangeForUserCompletion: NSRange {
+        let cursorLocation = selectedRange().location
+        let text = string as NSString
+        var start = cursorLocation
+
+        while start > 0 {
+            let ch = text.character(at: start - 1)
+            let c = Character(UnicodeScalar(ch)!)
+            if c.isLetter || c.isNumber || c == "_" || c == "." {
+                start -= 1
+            } else {
+                break
+            }
+        }
+
+        return NSRange(location: start, length: cursorLocation - start)
     }
 }

@@ -8,6 +8,7 @@ class AppState: ObservableObject {
     let queryService = QueryExecutionService()
     let explorerService = ObjectExplorerService()
     let userDataStore = UserDataStore()
+    let schemaCache = SchemaCache()
 
     @Published var activeConnectionId: UUID?
     @Published var statusMessage: String = "Ready"
@@ -326,6 +327,10 @@ class AppState: ObservableObject {
         node.children = [tablesFolder, viewsFolder, procsFolder, funcsFolder]
         node.isLoaded = true
         objectWillChange.send()
+
+        // Rebuild IntelliSense completions with new schema
+        schemaCache.updateFromExplorerNodes(explorerNodes)
+        CompletionProvider.rebuild(schema: schemaCache)
     }
 
     // MARK: - Legacy (manual connections)
