@@ -44,6 +44,15 @@ struct ObjectExplorerRow: View {
             Spacer()
         }
         .padding(.vertical, 1)
+        .onTapGesture(count: 2) {
+            if node.objectType == .database {
+                if node.isConnected {
+                    onNewQuery?(node)
+                } else {
+                    onConnect?(node)
+                }
+            }
+        }
         .contextMenu {
             if node.objectType == .database {
                 if node.isConnected {

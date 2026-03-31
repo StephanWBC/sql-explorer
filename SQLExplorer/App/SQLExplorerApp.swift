@@ -14,11 +14,6 @@ struct SQLExplorerApp: App {
         .defaultSize(width: 1400, height: 900)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Connection") {
-                    // TODO: open connection sheet
-                }
-                .keyboardShortcut("n", modifiers: .command)
-
                 Button("New Query Tab") {
                     newQueryTab()
                 }
@@ -27,7 +22,7 @@ struct SQLExplorerApp: App {
 
             CommandMenu("Query") {
                 Button("Execute") {
-                    // TODO: execute current query
+                    Task { await executeCurrentQuery() }
                 }
                 .keyboardShortcut(.return, modifiers: .command)
             }
@@ -37,11 +32,35 @@ struct SQLExplorerApp: App {
     private func newQueryTab() {
         guard let connId = appState.activeConnectionId else { return }
         let tab = QueryTab(
-            title: "Query \(appState.queryTabs.count + 1)",
+            title: "\(appState.currentDatabase) — Query \(appState.queryTabs.count + 1)",
             connectionId: connId,
             database: appState.currentDatabase
         )
         appState.queryTabs.append(tab)
         appState.selectedTabId = tab.id
+    }
+
+    @MainActor
+    private func executeCurrentQuery() async {
+        guard let tabId = appState.selectedTabId,
+              let tabIdx = appState.queryTabs.firstIndex(where: { $0.id == tabId }),
+              !appState.queryTabs[tabIdx].sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+
+        appState.queryTabs[tabIdx].isExecuting = true
+        appState.statusMessage = "Executing..."
+
+        do {
+            let result = try await appState.connectionManager.executeQuery(
+                appState.queryTabs[tabIdx].sql,
+                connectionId: appState.queryTabs[tabIdx].connectionId)
+            appState.queryTabs[tabIdx].result = result
+            appState.statusMessage = "\(result.rows.count) row(s) in \(result.elapsedMs)ms"
+        } catch {
+            appState.queryTabs[tabIdx].result = QueryResult(errorMessage: error.localizedDescription)
+            appState.statusMessage = "Error: \(error.localizedDescription)"
+        }
+
+        appState.queryTabs[tabIdx].isExecuting = false
     }
 }

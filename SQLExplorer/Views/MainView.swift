@@ -106,29 +106,6 @@ struct MainView: View {
         }
     }
 
-    private func executeCurrentQuery() async {
-        guard let tabId = appState.selectedTabId,
-              let tabIdx = appState.queryTabs.firstIndex(where: { $0.id == tabId }),
-              !appState.queryTabs[tabIdx].sql.isEmpty
-        else { return }
-
-        appState.queryTabs[tabIdx].isExecuting = true
-        appState.statusMessage = "Executing..."
-
-        let sql = appState.queryTabs[tabIdx].sql
-        let connId = appState.queryTabs[tabIdx].connectionId
-
-        do {
-            let result = try await appState.connectionManager.executeQuery(sql, connectionId: connId)
-            appState.queryTabs[tabIdx].result = result
-            appState.statusMessage = "Done — \(result.rows.count) rows in \(result.elapsedMs)ms"
-        } catch {
-            appState.queryTabs[tabIdx].result = QueryResult(errorMessage: error.localizedDescription)
-            appState.statusMessage = "Error: \(error.localizedDescription)"
-        }
-
-        appState.queryTabs[tabIdx].isExecuting = false
-    }
 }
 
 // MARK: - Make DatabaseObject work with List children

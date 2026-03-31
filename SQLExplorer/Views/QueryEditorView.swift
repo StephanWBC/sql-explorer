@@ -7,6 +7,58 @@ struct QueryEditorView: View {
     var body: some View {
         VSplitView {
             VStack(spacing: 0) {
+                // Query toolbar
+                HStack(spacing: 8) {
+                    Button {
+                        Task { await executeQuery() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            Image(systemName: "play.fill")
+                                .font(.system(size: 10))
+                            Text("Run")
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(.blue)
+                        .foregroundStyle(.white)
+                        .cornerRadius(5)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(tab.isExecuting || tab.sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .help("Execute query (⌘↵)")
+
+                    if tab.isExecuting {
+                        ProgressView()
+                            .scaleEffect(0.5)
+                            .frame(width: 16, height: 16)
+                        Text("Executing...")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    if let result = tab.result, !result.isError {
+                        Text("\(result.rows.count) row(s)  ·  \(result.elapsedMs)ms")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Text(tab.database)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.green)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.green.opacity(0.1))
+                        .cornerRadius(4)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(.bar)
+
+                Divider()
+
                 SQLTextEditor(text: $tab.sql)
                     .frame(minHeight: 150)
             }
@@ -43,6 +95,24 @@ struct QueryEditorView: View {
                 }
             }
         }
+    }
+    private func executeQuery() async {
+        guard !tab.sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+
+        tab.isExecuting = true
+        appState.statusMessage = "Executing on \(tab.database)..."
+
+        do {
+            let result = try await appState.connectionManager.executeQuery(
+                tab.sql, connectionId: tab.connectionId)
+            tab.result = result
+            appState.statusMessage = "\(result.rows.count) row(s) in \(result.elapsedMs)ms"
+        } catch {
+            tab.result = QueryResult(errorMessage: error.localizedDescription)
+            appState.statusMessage = "Error: \(error.localizedDescription)"
+        }
+
+        tab.isExecuting = false
     }
 }
 
