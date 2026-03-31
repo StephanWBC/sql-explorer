@@ -3,6 +3,7 @@ import SwiftUI
 struct FavoritesView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var userDataStore: UserDataStore
+    @Binding var selectedSidebarTab: SidebarTab
 
     var body: some View {
         if userDataStore.favorites.isEmpty {
@@ -44,6 +45,14 @@ struct FavoritesView: View {
                             } label: {
                                 Label("Connect", systemImage: "bolt.fill")
                             }
+                        }
+
+                        Divider()
+
+                        Button {
+                            selectedSidebarTab = .explorer
+                        } label: {
+                            Label("Show in Explorer", systemImage: "sidebar.left")
                         }
 
                         Divider()

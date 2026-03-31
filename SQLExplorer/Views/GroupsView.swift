@@ -3,6 +3,7 @@ import SwiftUI
 struct GroupsView: View {
     @EnvironmentObject var appState: AppState
     @ObservedObject var userDataStore: UserDataStore
+    @Binding var selectedSidebarTab: SidebarTab
     @State private var isCreatingGroup = false
     @State private var newGroupName = ""
     @State private var editingAlias: UUID?
@@ -86,6 +87,14 @@ struct GroupsView: View {
                                             } label: {
                                                 Label("Connect", systemImage: "bolt.fill")
                                             }
+                                        }
+
+                                        Divider()
+
+                                        Button {
+                                            selectedSidebarTab = .explorer
+                                        } label: {
+                                            Label("Show in Explorer", systemImage: "sidebar.left")
                                         }
 
                                         Divider()

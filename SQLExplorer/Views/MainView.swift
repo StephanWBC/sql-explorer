@@ -45,10 +45,10 @@ struct MainView: View {
                 case .explorer:
                     explorerContent
                 case .favorites:
-                    FavoritesView(userDataStore: appState.userDataStore)
+                    FavoritesView(userDataStore: appState.userDataStore, selectedSidebarTab: $selectedSidebarTab)
                         .environmentObject(appState)
                 case .groups:
-                    GroupsView(userDataStore: appState.userDataStore)
+                    GroupsView(userDataStore: appState.userDataStore, selectedSidebarTab: $selectedSidebarTab)
                         .environmentObject(appState)
                 }
             }
@@ -168,6 +168,12 @@ struct MainView: View {
                                         appState.disconnectFromDatabase(db)
                                     } label: {
                                         Label("Disconnect", systemImage: "bolt.slash")
+                                    }
+                                    Divider()
+                                    Button {
+                                        // Already on Explorer tab, just scroll context
+                                    } label: {
+                                        Label("Show in Explorer", systemImage: "sidebar.left")
                                     }
                                 }
                                 .onTapGesture(count: 2) {
