@@ -2,7 +2,6 @@ import SwiftUI
 
 @MainActor
 class AppState: ObservableObject {
-    // NOT @Published — these are ObservableObjects; views observe them directly
     let connectionManager = ConnectionManager()
     let connectionStore = ConnectionStore()
     let authService = AuthService()
@@ -14,10 +13,7 @@ class AppState: ObservableObject {
     @Published var statusMessage: String = "Ready"
     @Published var currentDatabase: String = ""
 
-    // Object Explorer tree
     @Published var explorerNodes: [DatabaseObject] = []
-
-    // Query tabs
     @Published var queryTabs: [QueryTab] = []
     @Published var selectedTabId: UUID?
 
@@ -30,32 +26,53 @@ class AppState: ObservableObject {
         }
     }
 
-    /// Build the Explorer tree from discovered Azure databases — grouped by server
+    // MARK: - Connection Status Lookup (used by ALL tabs: Explorer, Favorites, Groups)
+
+    /// Check if a specific database on a specific server is connected
+    func isConnected(databaseName: String, serverFqdn: String) -> Bool {
+        findExplorerNode(databaseName: databaseName, serverFqdn: serverFqdn)?.isConnected ?? false
+    }
+
+    /// Get the connectionId for a connected database (for query tabs)
+    func connectionId(databaseName: String, serverFqdn: String) -> UUID? {
+        findExplorerNode(databaseName: databaseName, serverFqdn: serverFqdn)?.connectionId
+    }
+
+    // MARK: - Build Explorer Tree
+
     func buildExplorerFromDatabases(_ databases: [AzureDatabase]) {
+        // Preserve existing connection state when rebuilding
+        var connectedDbs: [String: (UUID, Bool)] = [:]  // key -> (connectionId, isLoaded)
+        for node in allDatabaseNodes() {
+            if node.isConnected, let connId = node.connectionId, let fqdn = node.serverFqdn {
+                connectedDbs["\(node.name)@\(fqdn)"] = (connId, node.isLoaded)
+            }
+        }
+
         explorerNodes.removeAll()
 
-        // Group by server FQDN
         let grouped = Dictionary(grouping: databases, by: { $0.serverFqdn })
 
         for (serverFqdn, dbs) in grouped.sorted(by: { $0.key < $1.key }) {
             let shortName = serverFqdn.replacingOccurrences(of: ".database.windows.net", with: "")
 
-            let serverNode = DatabaseObject(
-                name: shortName,
-                objectType: .server,
-                isExpandable: true
-            )
-            serverNode.isLoaded = true  // children are pre-populated
+            let serverNode = DatabaseObject(name: shortName, objectType: .server, isExpandable: true)
+            serverNode.isLoaded = true
 
             for db in dbs.sorted(by: { $0.databaseName < $1.databaseName }) {
                 let dbNode = DatabaseObject(
-                    name: db.databaseName,
-                    database: db.databaseName,
-                    objectType: .database,
-                    isExpandable: false  // Only expandable when connected
-                )
-                // Store the full server FQDN for connection later
+                    name: db.databaseName, database: db.databaseName,
+                    objectType: .database, isExpandable: false)
                 dbNode.serverFqdn = db.serverFqdn
+
+                // Restore connection state if previously connected
+                let key = "\(db.databaseName)@\(db.serverFqdn)"
+                if let (connId, _) = connectedDbs[key] {
+                    dbNode.connectionId = connId
+                    dbNode.isConnected = true
+                    dbNode.isExpandable = true
+                }
+
                 serverNode.children.append(dbNode)
             }
 
@@ -65,17 +82,23 @@ class AppState: ObservableObject {
         statusMessage = "\(databases.count) database(s) across \(grouped.count) server(s)"
     }
 
-    // MARK: - Database Connect / Disconnect
+    // MARK: - Connect / Disconnect
 
     func connectToDatabase(_ node: DatabaseObject) async {
         guard node.objectType == .database,
               let serverFqdn = node.serverFqdn ?? findServerFqdn(for: node),
               !node.isConnected else { return }
 
+        // DEDUP: Check if already connected to this database on this server
+        if let existing = findExplorerNode(databaseName: node.name, serverFqdn: serverFqdn),
+           existing.isConnected {
+            statusMessage = "\(node.name) is already connected"
+            return
+        }
+
         node.isConnecting = true
         statusMessage = "Connecting to \(node.name)..."
 
-        // Get SQL access token
         guard let sqlToken = await authService.getSQLToken() else {
             statusMessage = "Failed to get SQL token for \(node.name)"
             node.isConnecting = false
@@ -97,12 +120,11 @@ class AppState: ObservableObject {
             let connId = try await connectionManager.connect(info)
             node.connectionId = connId
             node.isConnected = true
-            node.isExpandable = true  // Now expandable with schema
+            node.isExpandable = true
             activeConnectionId = connId
             currentDatabase = node.name
             statusMessage = "Connected to \(node.name)"
 
-            // Auto-load schema
             await loadSchemaForDatabase(node)
         } catch {
             statusMessage = "Failed: \(error.localizedDescription)"
@@ -121,9 +143,7 @@ class AppState: ObservableObject {
         node.connectionId = nil
         statusMessage = "Disconnected from \(node.name)"
 
-        // If this was the active connection, clear it
         if activeConnectionId == connId {
-            // Find another connected database
             let connected = allDatabaseNodes().first { $0.isConnected }
             activeConnectionId = connected?.connectionId
             currentDatabase = connected?.name ?? ""
@@ -134,16 +154,65 @@ class AppState: ObservableObject {
         guard let connId = node.connectionId, node.isConnected else { return }
         let tab = QueryTab(
             title: "\(node.name) — Query \(queryTabs.count + 1)",
-            connectionId: connId,
-            database: node.name
-        )
+            connectionId: connId, database: node.name)
         queryTabs.append(tab)
         selectedTabId = tab.id
         activeConnectionId = connId
         currentDatabase = node.name
     }
 
-    /// Find the server FQDN for a database node by walking up the tree
+    // MARK: - Connect from Favorites / Groups (ALWAYS uses real explorer nodes)
+
+    func connectToFavorite(_ fav: FavoriteDatabase) async {
+        let node = findExplorerNode(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn)
+        guard let node else {
+            statusMessage = "Database not found in current subscription. Switch subscription first."
+            return
+        }
+        await connectToDatabase(node)
+    }
+
+    func connectToGroupMember(_ member: GroupMember) async {
+        let node = findExplorerNode(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+        guard let node else {
+            statusMessage = "Database not found in current subscription. Switch subscription first."
+            return
+        }
+        await connectToDatabase(node)
+    }
+
+    func newQueryForFavorite(_ fav: FavoriteDatabase) {
+        guard let node = findExplorerNode(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn),
+              node.isConnected else { return }
+        newQueryForDatabase(node)
+    }
+
+    func newQueryForGroupMember(_ member: GroupMember) {
+        guard let node = findExplorerNode(databaseName: member.databaseName, serverFqdn: member.serverFqdn),
+              node.isConnected else { return }
+        newQueryForDatabase(node)
+    }
+
+    // MARK: - Disconnect by server+database (for Favorites/Groups)
+
+    func disconnect(databaseName: String, serverFqdn: String) {
+        guard let node = findExplorerNode(databaseName: databaseName, serverFqdn: serverFqdn) else { return }
+        disconnectFromDatabase(node)
+    }
+
+    // MARK: - Helpers
+
+    private func findExplorerNode(databaseName: String, serverFqdn: String) -> DatabaseObject? {
+        for server in explorerNodes {
+            if let db = server.children.first(where: {
+                $0.name == databaseName && $0.serverFqdn == serverFqdn
+            }) {
+                return db
+            }
+        }
+        return nil
+    }
+
     private func findServerFqdn(for node: DatabaseObject) -> String? {
         for server in explorerNodes {
             if server.children.contains(where: { $0.id == node.id }) {
@@ -153,7 +222,6 @@ class AppState: ObservableObject {
         return nil
     }
 
-    /// Get all database nodes from the tree
     private func allDatabaseNodes() -> [DatabaseObject] {
         explorerNodes.flatMap { $0.children.filter { $0.objectType == .database } }
     }
@@ -161,63 +229,52 @@ class AppState: ObservableObject {
     // MARK: - Schema Loading
 
     func loadSchemaForDatabase(_ node: DatabaseObject) async {
-        guard node.objectType == .database,
-              node.isConnected,
-              let connId = node.connectionId,
-              !node.isLoaded else { return }
+        guard node.objectType == .database, node.isConnected,
+              let connId = node.connectionId, !node.isLoaded else { return }
 
         node.children.removeAll()
 
-        // Create folder nodes
         let tablesFolder = DatabaseObject(name: "Tables", objectType: .folder, isExpandable: true)
         let viewsFolder = DatabaseObject(name: "Views", objectType: .folder, isExpandable: true)
         let procsFolder = DatabaseObject(name: "Stored Procedures", objectType: .folder, isExpandable: true)
         let funcsFolder = DatabaseObject(name: "Functions", objectType: .folder, isExpandable: true)
 
-        // Load tables
         do {
             let result = try await connectionManager.executeQuery(
                 "SELECT s.name + '.' + t.name FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id ORDER BY s.name, t.name",
                 connectionId: connId)
             for row in result.rows {
-                let tableNode = DatabaseObject(name: row[0], objectType: .table, isExpandable: false)
-                tablesFolder.children.append(tableNode)
+                tablesFolder.children.append(DatabaseObject(name: row[0], objectType: .table))
             }
             tablesFolder.isLoaded = true
         } catch { }
 
-        // Load views
         do {
             let result = try await connectionManager.executeQuery(
                 "SELECT s.name + '.' + v.name FROM sys.views v JOIN sys.schemas s ON v.schema_id = s.schema_id ORDER BY s.name, v.name",
                 connectionId: connId)
             for row in result.rows {
-                let viewNode = DatabaseObject(name: row[0], objectType: .view, isExpandable: false)
-                viewsFolder.children.append(viewNode)
+                viewsFolder.children.append(DatabaseObject(name: row[0], objectType: .view))
             }
             viewsFolder.isLoaded = true
         } catch { }
 
-        // Load stored procedures
         do {
             let result = try await connectionManager.executeQuery(
                 "SELECT s.name + '.' + p.name FROM sys.procedures p JOIN sys.schemas s ON p.schema_id = s.schema_id WHERE p.is_ms_shipped = 0 ORDER BY s.name, p.name",
                 connectionId: connId)
             for row in result.rows {
-                let procNode = DatabaseObject(name: row[0], objectType: .storedProcedure, isExpandable: false)
-                procsFolder.children.append(procNode)
+                procsFolder.children.append(DatabaseObject(name: row[0], objectType: .storedProcedure))
             }
             procsFolder.isLoaded = true
         } catch { }
 
-        // Load functions
         do {
             let result = try await connectionManager.executeQuery(
                 "SELECT s.name + '.' + o.name FROM sys.objects o JOIN sys.schemas s ON o.schema_id = s.schema_id WHERE o.type IN ('FN','IF','TF') AND o.is_ms_shipped = 0 ORDER BY s.name, o.name",
                 connectionId: connId)
             for row in result.rows {
-                let funcNode = DatabaseObject(name: row[0], objectType: .function, isExpandable: false)
-                funcsFolder.children.append(funcNode)
+                funcsFolder.children.append(DatabaseObject(name: row[0], objectType: .function))
             }
             funcsFolder.isLoaded = true
         } catch { }
@@ -227,54 +284,10 @@ class AppState: ObservableObject {
         objectWillChange.send()
     }
 
-    // MARK: - Connect from Favorites / Groups
+    // MARK: - Legacy (manual connections)
 
-    func connectToFavorite(_ fav: FavoriteDatabase) async {
-        // Find the database node in explorer, or create a temporary one
-        let node = findOrCreateDatabaseNode(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn)
-        await connectToDatabase(node)
-    }
-
-    func connectToGroupMember(_ member: GroupMember) async {
-        let node = findOrCreateDatabaseNode(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
-        await connectToDatabase(node)
-    }
-
-    func newQueryForFavorite(_ fav: FavoriteDatabase) {
-        let node = findOrCreateDatabaseNode(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn)
-        if node.isConnected {
-            newQueryForDatabase(node)
-        }
-    }
-
-    func newQueryForGroupMember(_ member: GroupMember) {
-        let node = findOrCreateDatabaseNode(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
-        if node.isConnected {
-            newQueryForDatabase(node)
-        }
-    }
-
-    private func findOrCreateDatabaseNode(databaseName: String, serverFqdn: String) -> DatabaseObject {
-        // Search existing explorer nodes
-        for server in explorerNodes {
-            if let db = server.children.first(where: { $0.name == databaseName && $0.serverFqdn == serverFqdn }) {
-                return db
-            }
-        }
-        // Create a temporary node
-        let node = DatabaseObject(name: databaseName, database: databaseName, objectType: .database)
-        node.serverFqdn = serverFqdn
-        return node
-    }
-
-    /// Add a server node (for manual connections)
     func addServerToExplorer(name: String, connectionId: UUID, groupId: UUID?, environmentLabel: String?) {
-        let serverNode = DatabaseObject(
-            name: name,
-            connectionId: connectionId,
-            objectType: .server,
-            isExpandable: true
-        )
+        let serverNode = DatabaseObject(name: name, connectionId: connectionId, objectType: .server, isExpandable: true)
         serverNode.environmentLabel = environmentLabel
 
         if let groupId {
@@ -286,8 +299,8 @@ class AppState: ObservableObject {
                 groupNode.groupId = groupId
                 groupNode.isLoaded = true
                 groupNode.children.append(serverNode)
-                let insertIdx = explorerNodes.firstIndex(where: { $0.objectType != .connectionGroup }) ?? explorerNodes.count
-                explorerNodes.insert(groupNode, at: insertIdx)
+                let idx = explorerNodes.firstIndex(where: { $0.objectType != .connectionGroup }) ?? explorerNodes.count
+                explorerNodes.insert(groupNode, at: idx)
             }
         } else {
             explorerNodes.append(serverNode)

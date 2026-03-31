@@ -14,7 +14,7 @@ struct FavoritesView: View {
                 Text("No favorites yet")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text("Right-click a database → Add to Favorites")
+                Text("Click the ☆ icon next to a database")
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
                 Spacer()
@@ -22,31 +22,43 @@ struct FavoritesView: View {
             .frame(maxWidth: .infinity)
         } else {
             List(userDataStore.favorites) { fav in
-                FavoriteRow(favorite: fav)
+                FavoriteRow(favorite: fav, appState: appState)
                     .contextMenu {
-                        Button {
-                            Task { await connectFavorite(fav) }
-                        } label: {
-                            Label("Connect", systemImage: "bolt.fill")
-                        }
+                        if appState.isConnected(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn) {
+                            Button {
+                                appState.newQueryForFavorite(fav)
+                            } label: {
+                                Label("New Query", systemImage: "plus.rectangle")
+                            }
 
-                        Button {
-                            appState.newQueryForFavorite(fav)
-                        } label: {
-                            Label("New Query", systemImage: "plus.rectangle")
+                            Divider()
+
+                            Button {
+                                appState.disconnect(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn)
+                            } label: {
+                                Label("Disconnect", systemImage: "bolt.slash")
+                            }
+                        } else {
+                            Button {
+                                Task { await appState.connectToFavorite(fav) }
+                            } label: {
+                                Label("Connect", systemImage: "bolt.fill")
+                            }
                         }
 
                         Divider()
 
-                        ForEach(userDataStore.groups) { group in
-                            Button("Add to \(group.name)") {
-                                userDataStore.addToGroup(
-                                    groupId: group.id,
-                                    databaseName: fav.databaseName,
-                                    serverFqdn: fav.serverFqdn,
-                                    subscriptionId: fav.subscriptionId,
-                                    subscriptionName: fav.subscriptionName,
-                                    alias: fav.displayName)
+                        if !userDataStore.groups.isEmpty {
+                            Menu("Add to Group") {
+                                ForEach(userDataStore.groups) { group in
+                                    Button(group.name) {
+                                        userDataStore.addToGroup(
+                                            groupId: group.id,
+                                            databaseName: fav.databaseName, serverFqdn: fav.serverFqdn,
+                                            subscriptionId: fav.subscriptionId, subscriptionName: fav.subscriptionName,
+                                            alias: fav.displayName)
+                                    }
+                                }
                             }
                         }
 
@@ -59,24 +71,33 @@ struct FavoritesView: View {
                         }
                     }
                     .onTapGesture(count: 2) {
-                        Task { await connectFavorite(fav) }
+                        if appState.isConnected(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn) {
+                            appState.newQueryForFavorite(fav)
+                        } else {
+                            Task { await appState.connectToFavorite(fav) }
+                        }
                     }
             }
             .listStyle(.sidebar)
         }
     }
-
-    private func connectFavorite(_ fav: FavoriteDatabase) async {
-        // Find or create a database node and connect
-        await appState.connectToFavorite(fav)
-    }
 }
 
 struct FavoriteRow: View {
     let favorite: FavoriteDatabase
+    @ObservedObject var appState: AppState
+
+    private var connected: Bool {
+        appState.isConnected(databaseName: favorite.databaseName, serverFqdn: favorite.serverFqdn)
+    }
 
     var body: some View {
         HStack(spacing: 6) {
+            // Connection status dot
+            Circle()
+                .fill(connected ? Color.green : Color.red.opacity(0.6))
+                .frame(width: 7, height: 7)
+
             Image(systemName: "star.fill")
                 .font(.system(size: 10))
                 .foregroundStyle(.yellow)
@@ -84,9 +105,10 @@ struct FavoriteRow: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text(favorite.displayName)
                     .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(connected ? .primary : .secondary)
                 Text("\(favorite.shortServer)  ·  \(favorite.subscriptionName)")
                     .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
             }
         }
         .padding(.vertical, 2)

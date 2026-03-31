@@ -17,18 +17,16 @@ struct GroupsView: View {
                         .textFieldStyle(.roundedBorder)
                         .font(.system(size: 12))
                     Button("Create") {
-                        if !newGroupName.trimmingCharacters(in: .whitespaces).isEmpty {
-                            _ = userDataStore.addGroup(name: newGroupName.trimmingCharacters(in: .whitespaces))
+                        let name = newGroupName.trimmingCharacters(in: .whitespaces)
+                        if !name.isEmpty {
+                            _ = userDataStore.addGroup(name: name)
                             newGroupName = ""
                             isCreatingGroup = false
                         }
                     }
                     .controlSize(.small)
-                    Button("Cancel") {
-                        isCreatingGroup = false
-                        newGroupName = ""
-                    }
-                    .controlSize(.small)
+                    Button("Cancel") { isCreatingGroup = false; newGroupName = "" }
+                        .controlSize(.small)
                 } else {
                     Spacer()
                     Button {
@@ -55,10 +53,6 @@ struct GroupsView: View {
                     Text("No groups yet")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    Text("Create a group, then add databases from Explorer")
-                        .font(.system(size: 10))
-                        .foregroundStyle(.tertiary)
-                        .multilineTextAlignment(.center)
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
@@ -67,18 +61,31 @@ struct GroupsView: View {
                     ForEach(userDataStore.groups) { group in
                         Section {
                             ForEach(group.members) { member in
-                                GroupMemberRow(member: member, editingAlias: $editingAlias, aliasText: $aliasText)
+                                GroupMemberRow(member: member, appState: appState)
                                     .contextMenu {
-                                        Button {
-                                            Task { await appState.connectToGroupMember(member) }
-                                        } label: {
-                                            Label("Connect", systemImage: "bolt.fill")
-                                        }
+                                        let connected = appState.isConnected(
+                                            databaseName: member.databaseName, serverFqdn: member.serverFqdn)
 
-                                        Button {
-                                            appState.newQueryForGroupMember(member)
-                                        } label: {
-                                            Label("New Query", systemImage: "plus.rectangle")
+                                        if connected {
+                                            Button {
+                                                appState.newQueryForGroupMember(member)
+                                            } label: {
+                                                Label("New Query", systemImage: "plus.rectangle")
+                                            }
+
+                                            Divider()
+
+                                            Button {
+                                                appState.disconnect(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+                                            } label: {
+                                                Label("Disconnect", systemImage: "bolt.slash")
+                                            }
+                                        } else {
+                                            Button {
+                                                Task { await appState.connectToGroupMember(member) }
+                                            } label: {
+                                                Label("Connect", systemImage: "bolt.fill")
+                                            }
                                         }
 
                                         Divider()
@@ -95,10 +102,15 @@ struct GroupsView: View {
                                         }
                                     }
                                     .onTapGesture(count: 2) {
-                                        Task { await appState.connectToGroupMember(member) }
+                                        let connected = appState.isConnected(
+                                            databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+                                        if connected {
+                                            appState.newQueryForGroupMember(member)
+                                        } else {
+                                            Task { await appState.connectToGroupMember(member) }
+                                        }
                                     }
 
-                                // Inline alias editor
                                 if editingAlias == member.id {
                                     HStack {
                                         TextField("Alias", text: $aliasText)
@@ -142,25 +154,30 @@ struct GroupsView: View {
 
 struct GroupMemberRow: View {
     let member: GroupMember
-    @Binding var editingAlias: UUID?
-    @Binding var aliasText: String
+    @ObservedObject var appState: AppState
+
+    private var connected: Bool {
+        appState.isConnected(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+    }
 
     var body: some View {
         HStack(spacing: 6) {
+            // REAL connection status — green if connected, red if not
             Circle()
-                .fill(.red.opacity(0.6))
+                .fill(connected ? Color.green : Color.red.opacity(0.6))
                 .frame(width: 7, height: 7)
 
             Image(systemName: "cylinder")
                 .font(.system(size: 11))
-                .foregroundStyle(.purple)
+                .foregroundStyle(connected ? .green : .purple)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(member.alias)
                     .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(connected ? .primary : .secondary)
                 Text("\(member.databaseName)  ·  \(member.shortServer)")
                     .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(.tertiary)
             }
         }
         .padding(.vertical, 1)
