@@ -18,6 +18,7 @@ struct MainView: View {
     @EnvironmentObject var appState: AppState
     @State private var explorerWidth: CGFloat = 280
     @State private var selectedSidebarTab: SidebarTab = .explorer
+    @State private var expandedNodes: Set<UUID> = []
 
     var body: some View {
         HSplitView {
@@ -123,6 +124,19 @@ struct MainView: View {
 
     // MARK: - Explorer Content
 
+    private func expandedBinding(_ id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { expandedNodes.contains(id) },
+            set: { isExpanded in
+                if isExpanded {
+                    expandedNodes.insert(id)
+                } else {
+                    expandedNodes.remove(id)
+                }
+            }
+        )
+    }
+
     @ViewBuilder
     private func explorerRow(_ node: DatabaseObject) -> some View {
         ObjectExplorerRow(
@@ -223,22 +237,18 @@ struct MainView: View {
                     // Full server/database tree — DisclosureGroup for programmatic expand
                     Section {
                         ForEach(appState.explorerNodes) { server in
-                            DisclosureGroup(isExpanded: Binding(
-                                get: { server.isTreeExpanded },
-                                set: { server.isTreeExpanded = $0 }
-                            )) {
+                            DisclosureGroup(isExpanded: expandedBinding(server.id)) {
                                 ForEach(server.children) { db in
                                     if db.isExpandable && !db.children.isEmpty {
-                                        DisclosureGroup(isExpanded: Binding(
-                                            get: { db.isTreeExpanded },
-                                            set: { db.isTreeExpanded = $0 }
-                                        )) {
+                                        DisclosureGroup(isExpanded: expandedBinding(db.id)) {
                                             ForEach(db.children) { child in
                                                 if child.isExpandable && !child.children.isEmpty {
-                                                    DisclosureGroup(child.name) {
+                                                    DisclosureGroup(isExpanded: expandedBinding(child.id)) {
                                                         ForEach(child.children) { leaf in
                                                             explorerRow(leaf)
                                                         }
+                                                    } label: {
+                                                        explorerRow(child)
                                                     }
                                                 } else {
                                                     explorerRow(child)
@@ -264,8 +274,16 @@ struct MainView: View {
                 }
                 .listStyle(.sidebar)
                 .onChange(of: appState.revealedNodeId) { _, nodeId in
-                    // Clear highlight after 2 seconds
-                    if nodeId != nil {
+                    if let nodeId {
+                        // Expand parent server + the node itself
+                        for server in appState.explorerNodes {
+                            if server.children.contains(where: { $0.id == nodeId }) {
+                                expandedNodes.insert(server.id)
+                            }
+                        }
+                        expandedNodes.insert(nodeId)
+
+                        // Clear highlight after 2 seconds
                         DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
                             appState.revealedNodeId = nil
                         }

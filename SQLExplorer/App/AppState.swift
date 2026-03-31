@@ -122,11 +122,8 @@ class AppState: ObservableObject {
             node.connectionId = connId
             node.isConnected = true
             node.isExpandable = true
-            node.isTreeExpanded = true
-            // Also expand the parent server
-            for server in explorerNodes where server.children.contains(where: { $0.id == node.id }) {
-                server.isTreeExpanded = true
-            }
+            // Trigger reveal to auto-expand in the tree
+            revealedNodeId = node.id
             activeConnectionId = connId
             currentDatabase = node.name
             statusMessage = "Connected to \(node.name)"
