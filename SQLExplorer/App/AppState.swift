@@ -99,6 +99,9 @@ class AppState: ObservableObject {
             activeConnectionId = connId
             currentDatabase = node.name
             statusMessage = "Connected to \(node.name)"
+
+            // Auto-load schema
+            await loadSchemaForDatabase(node)
         } catch {
             statusMessage = "Failed: \(error.localizedDescription)"
         }
@@ -148,6 +151,75 @@ class AppState: ObservableObject {
     /// Get all database nodes from the tree
     private func allDatabaseNodes() -> [DatabaseObject] {
         explorerNodes.flatMap { $0.children.filter { $0.objectType == .database } }
+    }
+
+    // MARK: - Schema Loading
+
+    func loadSchemaForDatabase(_ node: DatabaseObject) async {
+        guard node.objectType == .database,
+              node.isConnected,
+              let connId = node.connectionId,
+              !node.isLoaded else { return }
+
+        node.children.removeAll()
+
+        // Create folder nodes
+        let tablesFolder = DatabaseObject(name: "Tables", objectType: .folder, isExpandable: true)
+        let viewsFolder = DatabaseObject(name: "Views", objectType: .folder, isExpandable: true)
+        let procsFolder = DatabaseObject(name: "Stored Procedures", objectType: .folder, isExpandable: true)
+        let funcsFolder = DatabaseObject(name: "Functions", objectType: .folder, isExpandable: true)
+
+        // Load tables
+        do {
+            let result = try await connectionManager.executeQuery(
+                "SELECT s.name + '.' + t.name FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id ORDER BY s.name, t.name",
+                connectionId: connId)
+            for row in result.rows {
+                let tableNode = DatabaseObject(name: row[0], objectType: .table, isExpandable: false)
+                tablesFolder.children.append(tableNode)
+            }
+            tablesFolder.isLoaded = true
+        } catch { }
+
+        // Load views
+        do {
+            let result = try await connectionManager.executeQuery(
+                "SELECT s.name + '.' + v.name FROM sys.views v JOIN sys.schemas s ON v.schema_id = s.schema_id ORDER BY s.name, v.name",
+                connectionId: connId)
+            for row in result.rows {
+                let viewNode = DatabaseObject(name: row[0], objectType: .view, isExpandable: false)
+                viewsFolder.children.append(viewNode)
+            }
+            viewsFolder.isLoaded = true
+        } catch { }
+
+        // Load stored procedures
+        do {
+            let result = try await connectionManager.executeQuery(
+                "SELECT s.name + '.' + p.name FROM sys.procedures p JOIN sys.schemas s ON p.schema_id = s.schema_id WHERE p.is_ms_shipped = 0 ORDER BY s.name, p.name",
+                connectionId: connId)
+            for row in result.rows {
+                let procNode = DatabaseObject(name: row[0], objectType: .storedProcedure, isExpandable: false)
+                procsFolder.children.append(procNode)
+            }
+            procsFolder.isLoaded = true
+        } catch { }
+
+        // Load functions
+        do {
+            let result = try await connectionManager.executeQuery(
+                "SELECT s.name + '.' + o.name FROM sys.objects o JOIN sys.schemas s ON o.schema_id = s.schema_id WHERE o.type IN ('FN','IF','TF') AND o.is_ms_shipped = 0 ORDER BY s.name, o.name",
+                connectionId: connId)
+            for row in result.rows {
+                let funcNode = DatabaseObject(name: row[0], objectType: .function, isExpandable: false)
+                funcsFolder.children.append(funcNode)
+            }
+            funcsFolder.isLoaded = true
+        } catch { }
+
+        node.children = [tablesFolder, viewsFolder, procsFolder, funcsFolder]
+        node.isLoaded = true
+        objectWillChange.send()
     }
 
     /// Add a server node (for manual connections)

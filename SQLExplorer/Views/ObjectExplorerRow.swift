@@ -5,6 +5,7 @@ struct ObjectExplorerRow: View {
     var onConnect: ((DatabaseObject) -> Void)?
     var onDisconnect: ((DatabaseObject) -> Void)?
     var onNewQuery: ((DatabaseObject) -> Void)?
+    var onExpand: ((DatabaseObject) -> Void)?
 
     var body: some View {
         HStack(spacing: 6) {
@@ -44,6 +45,12 @@ struct ObjectExplorerRow: View {
             Spacer()
         }
         .padding(.vertical, 1)
+        .onAppear {
+            // When a connected database row appears and hasn't loaded schema yet, trigger load
+            if node.objectType == .database && node.isConnected && !node.isLoaded && node.children.isEmpty {
+                onExpand?(node)
+            }
+        }
         .onTapGesture(count: 2) {
             if node.objectType == .database {
                 if node.isConnected {
@@ -60,6 +67,12 @@ struct ObjectExplorerRow: View {
                         onNewQuery?(node)
                     } label: {
                         Label("New Query", systemImage: "plus.rectangle")
+                    }
+
+                    Button {
+                        onExpand?(node)
+                    } label: {
+                        Label("Refresh Schema", systemImage: "arrow.clockwise")
                     }
 
                     Divider()

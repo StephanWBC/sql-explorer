@@ -47,7 +47,11 @@ struct MainView: View {
                             node: node,
                             onConnect: { db in Task { await appState.connectToDatabase(db) } },
                             onDisconnect: { db in appState.disconnectFromDatabase(db) },
-                            onNewQuery: { db in appState.newQueryForDatabase(db) }
+                            onNewQuery: { db in appState.newQueryForDatabase(db) },
+                            onExpand: { db in
+                                db.isLoaded = false  // Force reload
+                                Task { await appState.loadSchemaForDatabase(db) }
+                            }
                         )
                     }
                     .listStyle(.sidebar)

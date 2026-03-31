@@ -138,11 +138,14 @@ class ODBCConnection {
         SQLFreeHandle(Int16(SQL_HANDLE_DBC), dbc)
     }
 
-    func executeQuery(_ sql: String) throws -> QueryResult {
+    func executeQuery(_ sql: String, maxRows: Int = 10000) throws -> QueryResult {
         var stmt: SQLHSTMT?
         SQLAllocHandle(Int16(SQL_HANDLE_STMT), dbc, &stmt)
         guard let stmt else { throw ODBCError.allocFailed }
         defer { SQLFreeHandle(Int16(SQL_HANDLE_STMT), stmt) }
+
+        // Set query timeout to 30 seconds
+        SQLSetStmtAttr(stmt, Int32(SQL_ATTR_QUERY_TIMEOUT), SQLPOINTER(bitPattern: 30), 0)
 
         let startTime = DispatchTime.now()
 
@@ -189,9 +192,9 @@ class ODBCConnection {
             columns.append(QueryResultColumn(id: i - 1, name: name, dataType: "varchar"))
         }
 
-        // Fetch rows
+        // Fetch rows (capped at maxRows to prevent memory exhaustion)
         var rows: [[String]] = []
-        while SQLFetch(stmt) == Int16(SQL_SUCCESS) {
+        while SQLFetch(stmt) == Int16(SQL_SUCCESS) && rows.count < maxRows {
             var row: [String] = []
             for i in 1...Int(colCount) {
                 var value = [SQLCHAR](repeating: 0, count: 4096)
