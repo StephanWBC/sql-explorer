@@ -40,6 +40,12 @@ class AppState: ObservableObject {
         findExplorerNode(databaseName: databaseName, serverFqdn: serverFqdn)?.connectionId
     }
 
+    /// Get the DatabaseObject node for a connected database (for tree expansion in Favorites/Groups)
+    func findConnectedNode(databaseName: String, serverFqdn: String) -> DatabaseObject? {
+        let node = findExplorerNode(databaseName: databaseName, serverFqdn: serverFqdn)
+        return node?.isConnected == true ? node : nil
+    }
+
     // MARK: - Build Explorer Tree
 
     func buildExplorerFromDatabases(_ databases: [AzureDatabase]) {

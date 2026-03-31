@@ -8,6 +8,7 @@ struct GroupsView: View {
     @State private var newGroupName = ""
     @State private var editingAlias: UUID?
     @State private var aliasText = ""
+    @State private var expandedNodes: Set<UUID> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -62,67 +63,41 @@ struct GroupsView: View {
                     ForEach(userDataStore.groups) { group in
                         Section {
                             ForEach(group.members) { member in
-                                GroupMemberRow(member: member, appState: appState)
-                                    .contextMenu {
-                                        let connected = appState.isConnected(
-                                            databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+                                let connected = appState.isConnected(
+                                    databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+                                let dbNode = connected ? appState.findConnectedNode(databaseName: member.databaseName, serverFqdn: member.serverFqdn) : nil
 
-                                        if connected {
-                                            Button {
+                                if let db = dbNode, db.isExpandable && !db.children.isEmpty {
+                                    // Connected with schema — show expandable tree
+                                    DisclosureGroup(isExpanded: expandedBinding(db.id)) {
+                                        ForEach(db.children) { folder in
+                                            if folder.isExpandable && !folder.children.isEmpty {
+                                                DisclosureGroup(isExpanded: expandedBinding(folder.id)) {
+                                                    ForEach(folder.children) { leaf in
+                                                        schemaRow(leaf)
+                                                    }
+                                                } label: {
+                                                    schemaRow(folder)
+                                                }
+                                            } else {
+                                                schemaRow(folder)
+                                            }
+                                        }
+                                    } label: {
+                                        connectedMemberLabel(member, group: group)
+                                    }
+                                } else {
+                                    // Not connected — flat row
+                                    GroupMemberRow(member: member, appState: appState)
+                                        .contextMenu { memberContextMenu(member, group: group, connected: connected) }
+                                        .onTapGesture(count: 2) {
+                                            if connected {
                                                 appState.newQueryForGroupMember(member)
-                                            } label: {
-                                                Label("New Query", systemImage: "plus.rectangle")
-                                            }
-
-                                            Divider()
-
-                                            Button {
-                                                appState.disconnect(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
-                                            } label: {
-                                                Label("Disconnect", systemImage: "bolt.slash")
-                                            }
-                                        } else {
-                                            Button {
+                                            } else {
                                                 Task { await appState.connectToGroupMember(member) }
-                                            } label: {
-                                                Label("Connect", systemImage: "bolt.fill")
                                             }
                                         }
-
-                                        Divider()
-
-                                        Button {
-                                            // Switch tab FIRST, then reveal after view mounts
-                                            selectedSidebarTab = .explorer
-                                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                                appState.revealInExplorer(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
-                                            }
-                                        } label: {
-                                            Label("Show in Explorer", systemImage: "sidebar.left")
-                                        }
-
-                                        Divider()
-
-                                        Button("Edit Alias") {
-                                            aliasText = member.alias
-                                            editingAlias = member.id
-                                        }
-
-                                        Button(role: .destructive) {
-                                            userDataStore.removeFromGroup(groupId: group.id, memberId: member.id)
-                                        } label: {
-                                            Label("Remove from Group", systemImage: "minus.circle")
-                                        }
-                                    }
-                                    .onTapGesture(count: 2) {
-                                        let connected = appState.isConnected(
-                                            databaseName: member.databaseName, serverFqdn: member.serverFqdn)
-                                        if connected {
-                                            appState.newQueryForGroupMember(member)
-                                        } else {
-                                            Task { await appState.connectToGroupMember(member) }
-                                        }
-                                    }
+                                }
 
                                 if editingAlias == member.id {
                                     HStack {
@@ -163,6 +138,112 @@ struct GroupsView: View {
             }
         }
     }
+
+    // MARK: - Connected member label (like Connected section in Explorer)
+
+    @ViewBuilder
+    private func connectedMemberLabel(_ member: GroupMember, group: DatabaseGroup) -> some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(.green)
+                .frame(width: 7, height: 7)
+            Image(systemName: "cylinder")
+                .font(.system(size: 11))
+                .foregroundStyle(.green)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(member.alias)
+                    .font(.system(size: 12, weight: .medium))
+                Text("\(member.databaseName)  ·  \(member.shortServer)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer()
+        }
+        .contextMenu { memberContextMenu(member, group: group, connected: true) }
+        .onTapGesture(count: 2) {
+            appState.newQueryForGroupMember(member)
+        }
+    }
+
+    // MARK: - Schema tree row
+
+    @ViewBuilder
+    private func schemaRow(_ node: DatabaseObject) -> some View {
+        ObjectExplorerRow(
+            node: node,
+            userDataStore: appState.userDataStore,
+            onConnect: { db in Task { await appState.connectToDatabase(db) } },
+            onDisconnect: { db in appState.disconnectFromDatabase(db) },
+            onNewQuery: { db in appState.newQueryForDatabase(db) },
+            onExpand: { db in
+                db.isLoaded = false
+                Task { await appState.loadSchemaForDatabase(db) }
+            }
+        )
+    }
+
+    // MARK: - Context menu
+
+    @ViewBuilder
+    private func memberContextMenu(_ member: GroupMember, group: DatabaseGroup, connected: Bool) -> some View {
+        if connected {
+            Button {
+                appState.newQueryForGroupMember(member)
+            } label: {
+                Label("New Query", systemImage: "plus.rectangle")
+            }
+
+            Divider()
+
+            Button {
+                appState.disconnect(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+            } label: {
+                Label("Disconnect", systemImage: "bolt.slash")
+            }
+        } else {
+            Button {
+                Task { await appState.connectToGroupMember(member) }
+            } label: {
+                Label("Connect", systemImage: "bolt.fill")
+            }
+        }
+
+        Divider()
+
+        Button {
+            selectedSidebarTab = .explorer
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                appState.revealInExplorer(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+            }
+        } label: {
+            Label("Show in Explorer", systemImage: "sidebar.left")
+        }
+
+        Divider()
+
+        Button("Edit Alias") {
+            aliasText = member.alias
+            editingAlias = member.id
+        }
+
+        Button(role: .destructive) {
+            userDataStore.removeFromGroup(groupId: group.id, memberId: member.id)
+        } label: {
+            Label("Remove from Group", systemImage: "minus.circle")
+        }
+    }
+
+    // MARK: - Expansion binding
+
+    private func expandedBinding(_ id: UUID) -> Binding<Bool> {
+        Binding(
+            get: { expandedNodes.contains(id) },
+            set: { isExpanded in
+                if isExpanded { expandedNodes.insert(id) }
+                else { expandedNodes.remove(id) }
+            }
+        )
+    }
 }
 
 struct GroupMemberRow: View {
@@ -175,7 +256,6 @@ struct GroupMemberRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            // REAL connection status — green if connected, red if not
             Circle()
                 .fill(connected ? Color.green : Color.red.opacity(0.6))
                 .frame(width: 7, height: 7)
