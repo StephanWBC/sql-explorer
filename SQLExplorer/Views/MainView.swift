@@ -275,16 +275,21 @@ struct MainView: View {
                 .listStyle(.sidebar)
                 .onChange(of: appState.revealedNodeId) { _, nodeId in
                     if let nodeId {
-                        // Expand parent server + the node itself
+                        // Step 1: Expand parent server FIRST so children render
                         for server in appState.explorerNodes {
                             if server.children.contains(where: { $0.id == nodeId }) {
                                 expandedNodes.insert(server.id)
+                                break
                             }
                         }
-                        expandedNodes.insert(nodeId)
 
-                        // Clear highlight after 2 seconds
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        // Step 2: On next frame, expand the database node itself
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                            expandedNodes.insert(nodeId)
+                        }
+
+                        // Clear highlight after 2.5 seconds
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
                             appState.revealedNodeId = nil
                         }
                     }

@@ -215,7 +215,7 @@ struct ObjectExplorerRow: View {
         switch node.objectType {
         case .server: return .blue
         case .connectionGroup: return .orange
-        case .database: return node.isConnected ? .green : .purple
+        case .database: return node.isConnected ? .green : .secondary
         case .table: return .green
         case .view: return .teal
         case .storedProcedure: return .orange
