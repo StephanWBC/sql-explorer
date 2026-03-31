@@ -101,8 +101,20 @@ struct MainView: View {
         }
         .toolbar(.hidden)
         // Status bar
+        .onAppear {
+            // Load explorer if databases already discovered
+            if !appState.authService.databases.isEmpty && appState.explorerNodes.isEmpty {
+                appState.buildExplorerFromDatabases(appState.authService.databases)
+            }
+        }
         .onChange(of: appState.authService.databases) { _, newDatabases in
             appState.buildExplorerFromDatabases(newDatabases)
+        }
+        .onReceive(appState.authService.$databases) { newDatabases in
+            // Belt-and-suspenders: also listen via Combine publisher
+            if !newDatabases.isEmpty {
+                appState.buildExplorerFromDatabases(newDatabases)
+            }
         }
         .safeAreaInset(edge: .bottom) {
             StatusBarView()
