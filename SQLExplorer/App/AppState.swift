@@ -201,11 +201,39 @@ class AppState: ObservableObject {
         disconnectFromDatabase(node)
     }
 
+    // MARK: - Tab Management
+
+    func closeTab(_ tabId: UUID) {
+        guard let idx = queryTabs.firstIndex(where: { $0.id == tabId }) else { return }
+        queryTabs.remove(at: idx)
+        if selectedTabId == tabId {
+            selectedTabId = queryTabs.last?.id
+        }
+    }
+
+    func closeCurrentTab() {
+        guard let tabId = selectedTabId else { return }
+        closeTab(tabId)
+    }
+
     // MARK: - Reveal in Explorer
 
     func revealInExplorer(databaseName: String, serverFqdn: String) {
         guard let node = findExplorerNode(databaseName: databaseName, serverFqdn: serverFqdn) else { return }
+
+        // Expand the parent server node so the database is visible
+        for server in explorerNodes where server.children.contains(where: { $0.id == node.id }) {
+            server.isExpandable = true
+            server.isLoaded = true
+        }
+
+        // If the database is connected, make sure it's expandable too
+        if node.isConnected {
+            node.isExpandable = true
+        }
+
         revealedNodeId = node.id
+        objectWillChange.send()
     }
 
     // MARK: - Helpers
@@ -324,4 +352,21 @@ struct QueryTab: Identifiable {
     var isExecuting: Bool = false
     var connectionId: UUID
     var database: String
+    var isSaved: Bool = false
+    var savedPath: URL?
+}
+
+// Saved query model for persistence
+struct SavedQuery: Codable, Identifiable, Hashable {
+    let id: UUID
+    var name: String
+    var sql: String
+    var database: String
+    var serverFqdn: String
+    var savedAt: Date
+
+    init(id: UUID = UUID(), name: String, sql: String, database: String, serverFqdn: String = "") {
+        self.id = id; self.name = name; self.sql = sql; self.database = database
+        self.serverFqdn = serverFqdn; self.savedAt = Date()
+    }
 }

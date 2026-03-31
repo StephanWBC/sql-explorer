@@ -82,7 +82,19 @@ struct MainView: View {
                     TabView(selection: $appState.selectedTabId) {
                         ForEach($appState.queryTabs) { $tab in
                             QueryEditorView(tab: $tab)
-                                .tabItem { Text(tab.title) }
+                                .tabItem {
+                                    HStack(spacing: 4) {
+                                        Text(tab.title)
+                                        Button {
+                                            appState.closeTab(tab.id)
+                                        } label: {
+                                            Image(systemName: "xmark")
+                                                .font(.system(size: 8))
+                                                .foregroundStyle(.secondary)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
                                 .tag(tab.id as UUID?)
                         }
                     }

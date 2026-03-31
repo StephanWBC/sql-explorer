@@ -20,6 +20,13 @@ struct SQLExplorerApp: App {
                 .keyboardShortcut("t", modifiers: .command)
             }
 
+            CommandGroup(replacing: .saveItem) {
+                Button("Close Tab") {
+                    appState.closeCurrentTab()
+                }
+                .keyboardShortcut("w", modifiers: .command)
+            }
+
             CommandMenu("Query") {
                 Button("Execute") {
                     Task { await executeCurrentQuery() }

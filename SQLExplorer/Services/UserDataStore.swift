@@ -4,6 +4,7 @@ import Foundation
 class UserDataStore: ObservableObject {
     @Published var favorites: [FavoriteDatabase] = []
     @Published var groups: [DatabaseGroup] = []
+    @Published var savedQueries: [SavedQuery] = []
 
     private static let storeDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".sqlexplorer")
@@ -12,6 +13,7 @@ class UserDataStore: ObservableObject {
     private struct StoreData: Codable {
         var favorites: [FavoriteDatabase] = []
         var groups: [DatabaseGroup] = []
+        var savedQueries: [SavedQuery] = []
     }
 
     init() { load() }
@@ -21,10 +23,11 @@ class UserDataStore: ObservableObject {
               let store = try? JSONDecoder().decode(StoreData.self, from: data) else { return }
         favorites = store.favorites
         groups = store.groups
+        savedQueries = store.savedQueries
     }
 
     func save() {
-        let store = StoreData(favorites: favorites, groups: groups)
+        let store = StoreData(favorites: favorites, groups: groups, savedQueries: savedQueries)
         try? FileManager.default.createDirectory(at: Self.storeDir, withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(store) {
             try? data.write(to: Self.file, options: .atomic)
@@ -88,6 +91,22 @@ class UserDataStore: ObservableObject {
     func removeFromGroup(groupId: UUID, memberId: UUID) {
         guard let idx = groups.firstIndex(where: { $0.id == groupId }) else { return }
         groups[idx].members.removeAll { $0.id == memberId }
+        save()
+    }
+
+    // MARK: - Saved Queries
+
+    func saveQuery(_ query: SavedQuery) {
+        if let idx = savedQueries.firstIndex(where: { $0.id == query.id }) {
+            savedQueries[idx] = query
+        } else {
+            savedQueries.append(query)
+        }
+        save()
+    }
+
+    func deleteSavedQuery(_ id: UUID) {
+        savedQueries.removeAll { $0.id == id }
         save()
     }
 

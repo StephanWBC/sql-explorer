@@ -3,12 +3,15 @@ import SwiftUI
 struct QueryEditorView: View {
     @Binding var tab: QueryTab
     @EnvironmentObject var appState: AppState
+    @State private var showingSaveDialog = false
+    @State private var saveName = ""
 
     var body: some View {
         VSplitView {
             VStack(spacing: 0) {
                 // Query toolbar
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
+                    // Run
                     Button {
                         Task { await executeQuery() }
                     } label: {
@@ -27,6 +30,28 @@ struct QueryEditorView: View {
                     .buttonStyle(.plain)
                     .disabled(tab.isExecuting || tab.sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     .help("Execute query (⌘↵)")
+
+                    // Save
+                    Button {
+                        saveName = tab.title
+                        showingSaveDialog = true
+                    } label: {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.system(size: 11))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Save query (⌘S)")
+
+                    // Close
+                    Button {
+                        appState.closeTab(tab.id)
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Close tab (⌘W)")
 
                     if tab.isExecuting {
                         ProgressView()
@@ -95,7 +120,25 @@ struct QueryEditorView: View {
                 }
             }
         }
+        .alert("Save Query", isPresented: $showingSaveDialog) {
+            TextField("Query name", text: $saveName)
+            Button("Save") {
+                let name = saveName.trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty else { return }
+                tab.title = name
+                let saved = SavedQuery(
+                    name: name, sql: tab.sql,
+                    database: tab.database)
+                appState.userDataStore.saveQuery(saved)
+                tab.isSaved = true
+                appState.statusMessage = "Query saved: \(name)"
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Give this query a name to save it.")
+        }
     }
+
     private func executeQuery() async {
         guard !tab.sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
