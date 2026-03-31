@@ -80,23 +80,29 @@ struct MainView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    TabView(selection: $appState.selectedTabId) {
-                        ForEach($appState.queryTabs) { $tab in
-                            QueryEditorView(tab: $tab)
-                                .tabItem {
-                                    HStack(spacing: 4) {
-                                        Text(tab.title)
-                                        Button {
-                                            appState.closeTab(tab.id)
-                                        } label: {
-                                            Image(systemName: "xmark")
-                                                .font(.system(size: 8))
-                                                .foregroundStyle(.secondary)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
+                    VStack(spacing: 0) {
+                        // Custom tab bar
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 0) {
+                                ForEach(appState.queryTabs) { tab in
+                                    QueryTabButton(
+                                        tab: tab,
+                                        isSelected: appState.selectedTabId == tab.id,
+                                        onSelect: { appState.selectedTabId = tab.id },
+                                        onClose: { appState.closeTab(tab.id) }
+                                    )
                                 }
-                                .tag(tab.id as UUID?)
+                            }
+                            .padding(.horizontal, 4)
+                        }
+                        .frame(height: 30)
+                        .background(.bar)
+
+                        Divider()
+
+                        // Content area — show selected tab
+                        if let idx = appState.queryTabs.firstIndex(where: { $0.id == appState.selectedTabId }) {
+                            QueryEditorView(tab: $appState.queryTabs[idx])
                         }
                     }
                 }
@@ -354,5 +360,51 @@ struct MainView: View {
 extension DatabaseObject {
     var optionalChildren: [DatabaseObject]? {
         children.isEmpty && !isExpandable ? nil : children
+    }
+}
+
+// MARK: - Custom Tab Button
+
+struct QueryTabButton: View {
+    let tab: QueryTab
+    let isSelected: Bool
+    let onSelect: () -> Void
+    let onClose: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        HStack(spacing: 4) {
+            // Executing indicator
+            if tab.isExecuting {
+                Circle()
+                    .fill(.red)
+                    .frame(width: 6, height: 6)
+            }
+
+            Text(tab.title)
+                .font(.system(size: 11, weight: isSelected ? .semibold : .regular))
+                .lineLimit(1)
+
+            // Close button — visible on hover or when selected
+            Button {
+                onClose()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(isHovering || isSelected ? Color.secondary : Color.clear)
+            }
+            .buttonStyle(.plain)
+            .help("Close tab (⌘W)")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(isSelected ? Color.accentColor.opacity(0.15) : (isHovering ? Color.white.opacity(0.05) : Color.clear))
+        .cornerRadius(5)
+        .onHover { hovering in
+            isHovering = hovering
+        }
+        .onTapGesture {
+            onSelect()
+        }
     }
 }

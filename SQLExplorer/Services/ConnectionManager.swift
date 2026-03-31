@@ -86,6 +86,15 @@ class ConnectionManager: ObservableObject {
         if case .failure(let error) = result { throw error }
     }
 
+    /// Cancel an in-progress query on the given connection.
+    /// Safe to call from main thread — dbcancel sets an internal flag
+    /// that causes dbnextrow/dbsqlexec to return FAIL on the query thread.
+    func cancelQuery(connectionId: UUID) {
+        if let proc = freetdsProcesses[connectionId] {
+            swift_dbcancel(proc)
+        }
+    }
+
     func disconnect(_ connectionId: UUID) {
         queue.async { [self] in
             if let conn = odbcConnections.removeValue(forKey: connectionId) {

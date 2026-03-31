@@ -11,25 +11,45 @@ struct QueryEditorView: View {
             VStack(spacing: 0) {
                 // Query toolbar
                 HStack(spacing: 6) {
-                    // Run
-                    Button {
-                        Task { await executeQuery() }
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "play.fill")
-                                .font(.system(size: 10))
-                            Text("Run")
-                                .font(.system(size: 12, weight: .medium))
+                    // Play/Stop toggle
+                    if tab.isExecuting {
+                        Button {
+                            appState.connectionManager.cancelQuery(connectionId: tab.connectionId)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "stop.fill")
+                                    .font(.system(size: 10))
+                                Text("Cancel")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(.red)
+                            .foregroundStyle(.white)
+                            .cornerRadius(5)
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 4)
-                        .background(.blue)
-                        .foregroundStyle(.white)
-                        .cornerRadius(5)
+                        .buttonStyle(.plain)
+                        .help("Cancel query (⌘.)")
+                    } else {
+                        Button {
+                            Task { await executeQuery() }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 10))
+                                Text("Run")
+                                    .font(.system(size: 12, weight: .medium))
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(.green)
+                            .foregroundStyle(.white)
+                            .cornerRadius(5)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(tab.sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .help("Execute query (⌘↵)")
                     }
-                    .buttonStyle(.plain)
-                    .disabled(tab.isExecuting || tab.sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .help("Execute query (⌘↵)")
 
                     // Save
                     Button {
@@ -41,15 +61,6 @@ struct QueryEditorView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Save query (⌘S)")
-
-                    if tab.isExecuting {
-                        ProgressView()
-                            .scaleEffect(0.5)
-                            .frame(width: 16, height: 16)
-                        Text("Executing...")
-                            .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
-                    }
 
                     Spacer()
 

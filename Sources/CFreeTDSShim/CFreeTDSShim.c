@@ -11,3 +11,7 @@ void swift_DBSETLPWD(LOGINREC *login, const char *pwd) {
 void swift_DBSETLAPP(LOGINREC *login, const char *app) {
     DBSETLAPP(login, app);
 }
+
+RETCODE swift_dbcancel(DBPROCESS *dbproc) {
+    return dbcancel(dbproc);
+}
