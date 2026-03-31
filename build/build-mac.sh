@@ -156,7 +156,7 @@ echo "Code signed with Keychain entitlements."
 DMG_PATH="publish/SQLExplorer-${VERSION}-mac.dmg"
 STAGING="publish/dmg-staging"
 mkdir -p "$STAGING"
-cp -R "$APP_DIR" "$STAGING/"
+cp -RL "$APP_DIR" "$STAGING/"
 ln -sf /Applications "$STAGING/Applications"
 
 hdiutil create -volname "SQL Explorer" -srcfolder "$STAGING" \
