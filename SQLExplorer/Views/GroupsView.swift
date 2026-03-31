@@ -262,7 +262,7 @@ struct GroupMemberRow: View {
 
             Image(systemName: "cylinder")
                 .font(.system(size: 11))
-                .foregroundStyle(connected ? .green : .purple)
+                .foregroundStyle(connected ? .green : .secondary)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(member.alias)
