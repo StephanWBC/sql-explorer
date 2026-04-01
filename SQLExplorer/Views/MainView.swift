@@ -117,11 +117,6 @@ struct MainView: View {
         .onChange(of: appState.authService.databases) { _, newDatabases in
             appState.buildExplorerFromDatabases(newDatabases)
         }
-        .onReceive(appState.authService.$databases) { newDatabases in
-            if !newDatabases.isEmpty {
-                appState.buildExplorerFromDatabases(newDatabases)
-            }
-        }
         .safeAreaInset(edge: .bottom) {
             StatusBarView()
                 .environmentObject(appState)
@@ -275,27 +270,7 @@ struct MainView: View {
                     if !connectedDatabases.isEmpty {
                         Section {
                             ForEach(connectedDatabases) { db in
-                                if db.isExpandable && !db.children.isEmpty {
-                                    DisclosureGroup(isExpanded: expandedBinding(db.id)) {
-                                        ForEach(db.children) { child in
-                                            if child.isExpandable && !child.children.isEmpty {
-                                                DisclosureGroup(isExpanded: expandedBinding(child.id)) {
-                                                    ForEach(child.children) { leaf in
-                                                        explorerRow(leaf)
-                                                    }
-                                                } label: {
-                                                    explorerRow(child)
-                                                }
-                                            } else {
-                                                explorerRow(child)
-                                            }
-                                        }
-                                    } label: {
-                                        connectedDbLabel(db)
-                                    }
-                                } else {
-                                    connectedDbLabel(db)
-                                }
+                                connectedDbLabel(db)
                             }
                         } header: {
                             Text("CONNECTED")

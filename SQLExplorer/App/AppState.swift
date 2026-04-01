@@ -147,11 +147,16 @@ class AppState: ObservableObject {
     func disconnectFromDatabase(_ node: DatabaseObject) {
         guard let connId = node.connectionId, node.isConnected else { return }
         connectionManager.disconnect(connId)
+
+        // Batch all mutations before notifying SwiftUI to avoid
+        // intermediate diff states that crash OutlineListCoordinator
+        node.children = []
         node.isConnected = false
         node.isExpandable = false
         node.isLoaded = false
-        node.children.removeAll()
         node.connectionId = nil
+        objectWillChange.send()
+
         statusMessage = "Disconnected from \(node.name)"
 
         if activeConnectionId == connId {
@@ -282,8 +287,6 @@ class AppState: ObservableObject {
     func loadSchemaForDatabase(_ node: DatabaseObject) async {
         guard node.objectType == .database, node.isConnected,
               let connId = node.connectionId, !node.isLoaded else { return }
-
-        node.children.removeAll()
 
         let tablesFolder = DatabaseObject(name: "Tables", objectType: .folder, isExpandable: true)
         let viewsFolder = DatabaseObject(name: "Views", objectType: .folder, isExpandable: true)
