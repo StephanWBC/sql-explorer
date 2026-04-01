@@ -415,23 +415,39 @@ class AppState: ObservableObject {
 
     // MARK: - Database Diagram (ERD)
 
-    func loadERD(databaseName: String, connectionId: UUID) async {
+    /// Phase 1: Open the table picker (fast — just fetches table names)
+    func openERDPicker(databaseName: String, connectionId: UUID) async {
         let schema = ERDSchema()
         schema.databaseName = databaseName
-        schema.isLoading = true
+        schema.connectionId = connectionId
+        schema.phase = .loading
         erdSchema = schema
+
+        do {
+            let tableEntries = try await ERDService.listTables(
+                connectionManager: connectionManager, connectionId: connectionId)
+            schema.availableTables = tableEntries
+            schema.phase = .pickingTables
+        } catch {
+            schema.phase = .error(error.localizedDescription)
+        }
+    }
+
+    /// Phase 2: Generate diagram for selected tables
+    func generateERD() async {
+        guard let schema = erdSchema, let connId = schema.connectionId else { return }
+        schema.phase = .loading
 
         do {
             let (tables, relationships) = try await ERDService.loadSchema(
                 connectionManager: connectionManager,
-                connectionId: connectionId,
-                databaseName: databaseName)
+                connectionId: connId,
+                tableNames: schema.selectedTableNames)
             schema.tables = tables
             schema.relationships = relationships
-            schema.isLoading = false
+            schema.phase = .ready
         } catch {
-            schema.errorMessage = error.localizedDescription
-            schema.isLoading = false
+            schema.phase = .error(error.localizedDescription)
         }
     }
 

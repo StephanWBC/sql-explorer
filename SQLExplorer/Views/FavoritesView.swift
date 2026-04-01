@@ -134,7 +134,7 @@ struct FavoritesView: View {
 
             if let connId = appState.connectionId(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn) {
                 Button {
-                    Task { await appState.loadERD(databaseName: fav.databaseName, connectionId: connId) }
+                    Task { await appState.openERDPicker(databaseName: fav.databaseName, connectionId: connId) }
                     openWindow(id: "erd")
                 } label: {
                     Label("Database Diagram", systemImage: "rectangle.connected.to.line.below")

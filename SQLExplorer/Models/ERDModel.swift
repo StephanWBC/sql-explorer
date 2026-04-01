@@ -35,11 +35,30 @@ struct ERDRelationship: Identifiable {
     let toColumn: String
 }
 
+/// Lightweight table name for the picker (before loading full schema)
+struct ERDTableEntry: Identifiable, Hashable {
+    let id = UUID()
+    let schema: String
+    let name: String
+    var fullName: String { "\(schema).\(name)" }
+}
+
+enum ERDPhase {
+    case pickingTables      // showing table picker
+    case loading            // fetching schema for selected tables
+    case ready              // diagram ready
+    case error(String)      // failed
+}
+
 @MainActor
 class ERDSchema: ObservableObject {
     @Published var tables: [ERDTable] = []
     @Published var relationships: [ERDRelationship] = []
     @Published var databaseName: String = ""
-    @Published var isLoading: Bool = false
-    @Published var errorMessage: String?
+    @Published var connectionId: UUID?
+    @Published var phase: ERDPhase = .pickingTables
+
+    // Table picker state
+    @Published var availableTables: [ERDTableEntry] = []
+    @Published var selectedTableNames: Set<String> = []  // "schema.table" strings
 }

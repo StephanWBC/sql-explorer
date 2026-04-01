@@ -112,7 +112,7 @@ struct ObjectExplorerRow: View {
 
                     Button {
                         if let connId = node.connectionId {
-                            Task { await appState.loadERD(databaseName: node.name, connectionId: connId) }
+                            Task { await appState.openERDPicker(databaseName: node.name, connectionId: connId) }
                             openWindow(id: "erd")
                         }
                     } label: {

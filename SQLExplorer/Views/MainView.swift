@@ -183,7 +183,7 @@ struct MainView: View {
 
             Button {
                 if let connId = db.connectionId {
-                    Task { await appState.loadERD(databaseName: db.name, connectionId: connId) }
+                    Task { await appState.openERDPicker(databaseName: db.name, connectionId: connId) }
                     openWindow(id: "erd")
                 }
             } label: {
