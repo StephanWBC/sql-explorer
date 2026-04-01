@@ -67,7 +67,14 @@ struct ResultsTableView: View {
     }
 }
 
-// MARK: - Grid Coordinator (top-level for #selector visibility)
+// MARK: - Cell coordinate for selection tracking
+
+struct CellCoord: Hashable {
+    let row: Int
+    let col: Int  // data column index (0-based, excludes row number column)
+}
+
+// MARK: - Grid Coordinator
 
 @MainActor
 class DataGridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate {
@@ -77,6 +84,10 @@ class DataGridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate 
     var statusText: Binding<String>
     var showCopied: Binding<Bool>
 
+    // Cell-level selection
+    var selectedCells: Set<CellCoord> = []
+    var selectedWholeRows: Set<Int> = []  // rows selected by clicking row number
+
     private let monoFont = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
     private let nullFont: NSFont = {
         let desc = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
@@ -84,6 +95,8 @@ class DataGridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         return NSFont(descriptor: desc, size: 12) ?? NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
     }()
     private let rowNumBg = NSColor(red: 0.08, green: 0.10, blue: 0.12, alpha: 1)
+    private let cellHighlight = NSColor.controlAccentColor.withAlphaComponent(0.25)
+    private let rowHighlight = NSColor.controlAccentColor.withAlphaComponent(0.15)
 
     init(result: QueryResult, maxRows: Int, statusText: Binding<String>, showCopied: Binding<Bool>) {
         self.result = result
@@ -115,32 +128,91 @@ class DataGridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         24
     }
 
-    func tableViewSelectionDidChange(_ notification: Notification) {
-        guard let tv = tableView else { return }
-        let selectedRows = tv.selectedRowIndexes
+    // We disable NSTableView's built-in selection — we manage our own
+    func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool {
+        false
+    }
 
-        if selectedRows.count == 1, let row = selectedRows.first {
-            let clickedCol = tv.clickedColumn
-            if clickedCol >= 1 {
-                let colIdx = clickedCol - 1
-                if colIdx < result.columns.count && row < result.rows.count {
-                    let value = result.rows[row][colIdx]
-                    copyToClipboard(value)
-                    let colName = result.columns[colIdx].name
-                    statusText.wrappedValue = "\(colName): \(value)"
-                    flashCopied()
-                    if let cellView = tv.view(atColumn: clickedCol, row: row, makeIfNecessary: false) {
-                        flashCell(cellView)
+    // MARK: Cell selection handling (called from DataGridTableView.mouseDown)
+
+    func handleCellClick(row: Int, tableColumn: Int, shift: Bool) {
+        guard let tv = tableView else { return }
+        let dataCol = tableColumn - 1  // offset for row number column
+
+        if tableColumn == 0 {
+            // Clicked row number → select entire row
+            if shift && !selectedWholeRows.isEmpty {
+                let anchor = selectedWholeRows.min() ?? row
+                let range = min(anchor, row)...max(anchor, row)
+                selectedWholeRows = Set(range)
+                selectedCells.removeAll()
+            } else if shift {
+                selectedWholeRows.insert(row)
+            } else {
+                selectedCells.removeAll()
+                selectedWholeRows = [row]
+            }
+            updateStatus()
+        } else if dataCol >= 0 && dataCol < result.columns.count && row < result.rows.count {
+            // Clicked a data cell
+            let coord = CellCoord(row: row, col: dataCol)
+            if shift {
+                // Shift-click: extend selection range
+                selectedWholeRows.removeAll()
+                if let anchor = selectedCells.first {
+                    let minRow = min(anchor.row, row)
+                    let maxRow = max(anchor.row, row)
+                    let minCol = min(anchor.col, dataCol)
+                    let maxCol = max(anchor.col, dataCol)
+                    selectedCells.removeAll()
+                    for r in minRow...maxRow {
+                        for c in minCol...maxCol {
+                            selectedCells.insert(CellCoord(row: r, col: c))
+                        }
                     }
+                } else {
+                    selectedCells = [coord]
                 }
             } else {
-                statusText.wrappedValue = "Row \(row + 1) selected"
+                selectedWholeRows.removeAll()
+                selectedCells = [coord]
             }
-        } else if selectedRows.count > 1 {
-            statusText.wrappedValue = "\(selectedRows.count) rows selected"
+            updateStatus()
+        }
+
+        tv.needsDisplay = true
+        // Redraw visible cells to update highlights
+        let visibleRows = tv.rows(in: tv.visibleRect)
+        tv.reloadData(forRowIndexes: IndexSet(integersIn: visibleRows.location..<(visibleRows.location + visibleRows.length)),
+                      columnIndexes: IndexSet(integersIn: 0..<tv.numberOfColumns))
+    }
+
+    private func updateStatus() {
+        if !selectedWholeRows.isEmpty {
+            if selectedWholeRows.count == 1 {
+                statusText.wrappedValue = "Row \(selectedWholeRows.first! + 1) selected"
+            } else {
+                statusText.wrappedValue = "\(selectedWholeRows.count) rows selected"
+            }
+        } else if selectedCells.count == 1, let cell = selectedCells.first {
+            let colName = result.columns[cell.col].name
+            let value = result.rows[cell.row][cell.col]
+            statusText.wrappedValue = "\(colName): \(value)"
+        } else if selectedCells.count > 1 {
+            let rows = Set(selectedCells.map(\.row)).count
+            let cols = Set(selectedCells.map(\.col)).count
+            statusText.wrappedValue = "\(selectedCells.count) cells selected (\(rows) rows × \(cols) cols)"
         } else {
             statusText.wrappedValue = ""
         }
+    }
+
+    func isCellSelected(row: Int, dataCol: Int) -> Bool {
+        selectedWholeRows.contains(row) || selectedCells.contains(CellCoord(row: row, col: dataCol))
+    }
+
+    func isRowSelected(_ row: Int) -> Bool {
+        selectedWholeRows.contains(row)
     }
 
     // MARK: Cell builders
@@ -156,7 +228,6 @@ class DataGridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate 
             container = NSView()
             container.identifier = identifier
             container.wantsLayer = true
-            container.layer?.backgroundColor = rowNumBg.cgColor
 
             let tf = NSTextField(labelWithString: "\(row + 1)")
             tf.font = monoFont
@@ -170,6 +241,13 @@ class DataGridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate 
                 tf.centerYAnchor.constraint(equalTo: container.centerYAnchor),
             ])
         }
+
+        // Highlight row number if whole row selected
+        container.wantsLayer = true
+        container.layer?.backgroundColor = isRowSelected(row)
+            ? NSColor.controlAccentColor.withAlphaComponent(0.35).cgColor
+            : rowNumBg.cgColor
+
         return container
     }
 
@@ -191,6 +269,7 @@ class DataGridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         } else {
             container = NSView()
             container.identifier = identifier
+            container.wantsLayer = true
 
             tf = NSTextField(labelWithString: "")
             tf.cell?.truncatesLastVisibleLine = true
@@ -218,7 +297,77 @@ class DataGridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         }
         tf.alignment = .left
 
+        // Cell highlight
+        container.wantsLayer = true
+        if isCellSelected(row: row, dataCol: colIdx) {
+            container.layer?.backgroundColor = cellHighlight.cgColor
+        } else if isRowSelected(row) {
+            container.layer?.backgroundColor = rowHighlight.cgColor
+        } else {
+            container.layer?.backgroundColor = nil
+        }
+
         return container
+    }
+
+    // MARK: Copy logic
+
+    func copyCurrentSelection() {
+        if !selectedWholeRows.isEmpty {
+            let sortedRows = selectedWholeRows.sorted()
+            let text = sortedRows.map { result.rows[$0].joined(separator: "\t") }.joined(separator: "\n")
+            copyToClipboard(text)
+            statusText.wrappedValue = "Copied \(sortedRows.count) row(s)"
+            flashCopied()
+        } else if !selectedCells.isEmpty {
+            let sortedCells = selectedCells.sorted { $0.row == $1.row ? $0.col < $1.col : $0.row < $1.row }
+            let minRow = sortedCells.first!.row, maxRow = sortedCells.last!.row
+            let minCol = sortedCells.map(\.col).min()!, maxCol = sortedCells.map(\.col).max()!
+
+            var lines: [String] = []
+            for r in minRow...maxRow {
+                var cells: [String] = []
+                for c in minCol...maxCol {
+                    if selectedCells.contains(CellCoord(row: r, col: c)) {
+                        cells.append(result.rows[r][c])
+                    } else {
+                        cells.append("")
+                    }
+                }
+                lines.append(cells.joined(separator: "\t"))
+            }
+            copyToClipboard(lines.joined(separator: "\n"))
+            if selectedCells.count == 1, let cell = selectedCells.first {
+                statusText.wrappedValue = "Copied: \(result.rows[cell.row][cell.col])"
+            } else {
+                statusText.wrappedValue = "Copied \(selectedCells.count) cells"
+            }
+            flashCopied()
+        }
+    }
+
+    func copyCurrentSelectionWithHeaders() {
+        if !selectedWholeRows.isEmpty {
+            let header = result.columns.map(\.name).joined(separator: "\t")
+            let sortedRows = selectedWholeRows.sorted()
+            let text = sortedRows.map { result.rows[$0].joined(separator: "\t") }.joined(separator: "\n")
+            copyToClipboard(header + "\n" + text)
+            statusText.wrappedValue = "Copied \(sortedRows.count) row(s) with headers"
+            flashCopied()
+        } else if !selectedCells.isEmpty {
+            let minCol = selectedCells.map(\.col).min()!
+            let maxCol = selectedCells.map(\.col).max()!
+            let header = (minCol...maxCol).map { result.columns[$0].name }.joined(separator: "\t")
+            copyCurrentSelection() // copies cells
+            // prepend header
+            let pb = NSPasteboard.general
+            if let existing = pb.string(forType: .string) {
+                pb.clearContents()
+                pb.setString(header + "\n" + existing, forType: .string)
+            }
+            statusText.wrappedValue = "Copied \(selectedCells.count) cells with headers"
+            flashCopied()
+        }
     }
 
     // MARK: Context menu actions
@@ -252,8 +401,8 @@ class DataGridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         flashCopied()
     }
 
-    @objc func copySelectedRowsAction(_ sender: Any?) {
-        copySelected()
+    @objc func copySelectedAction(_ sender: Any?) {
+        copyCurrentSelection()
     }
 
     @objc func copyAllAction(_ sender: Any?) {
@@ -275,9 +424,12 @@ class DataGridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate 
     }
 
     @objc func copyAsInsertAction(_ sender: Any?) {
-        guard let tv = tableView else { return }
-        let selectedRows = tv.selectedRowIndexes
-        let rowIndices = selectedRows.isEmpty ? IndexSet(0..<displayRowCount) : selectedRows
+        let rowIndices: [Int]
+        if !selectedWholeRows.isEmpty {
+            rowIndices = selectedWholeRows.sorted()
+        } else {
+            rowIndices = Array(0..<displayRowCount)
+        }
 
         let colNames = result.columns.map(\.name).joined(separator: ", ")
         var statements: [String] = []
@@ -296,34 +448,9 @@ class DataGridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         flashCopied()
     }
 
-    // MARK: Keyboard copy
-
-    func copySelected() {
-        guard let tv = tableView else { return }
-        let selectedRows = tv.selectedRowIndexes
-        guard !selectedRows.isEmpty else { return }
-
-        let rows = selectedRows.map { result.rows[$0].joined(separator: "\t") }
-        copyToClipboard(rows.joined(separator: "\n"))
-        statusText.wrappedValue = "Copied \(selectedRows.count) row(s)"
-        flashCopied()
-    }
-
-    func copySelectedWithHeaders() {
-        guard let tv = tableView else { return }
-        let selectedRows = tv.selectedRowIndexes
-        guard !selectedRows.isEmpty else { return }
-
-        let header = result.columns.map(\.name).joined(separator: "\t")
-        let rows = selectedRows.map { result.rows[$0].joined(separator: "\t") }
-        copyToClipboard(([header] + rows).joined(separator: "\n"))
-        statusText.wrappedValue = "Copied \(selectedRows.count) row(s) with headers"
-        flashCopied()
-    }
-
     // MARK: Helpers
 
-    private func copyToClipboard(_ string: String) {
+    func copyToClipboard(_ string: String) {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(string, forType: .string)
@@ -336,39 +463,37 @@ class DataGridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         return value
     }
 
-    private func flashCopied() {
+    func flashCopied() {
         showCopied.wrappedValue = true
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(1.2))
             self?.showCopied.wrappedValue = false
         }
     }
-
-    private func flashCell(_ cellView: NSView) {
-        let flash = NSView(frame: cellView.bounds)
-        flash.wantsLayer = true
-        flash.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.3).cgColor
-        flash.layer?.cornerRadius = 2
-        flash.alphaValue = 1
-        flash.autoresizingMask = [.width, .height]
-        cellView.addSubview(flash)
-
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.5
-            flash.animator().alphaValue = 0
-        } completionHandler: {
-            flash.removeFromSuperview()
-        }
-    }
 }
 
-// MARK: - Custom NSTableView subclass with copy & context menu
+// MARK: - Custom NSTableView with cell-level selection
 
 class DataGridTableView: NSTableView {
     weak var gridCoordinator: DataGridCoordinator?
 
     var contextColumn: Int = -1
     var contextRow: Int = -1
+
+    override func mouseDown(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let clickedRow = row(at: point)
+        let clickedCol = column(at: point)
+        let shift = event.modifierFlags.contains(.shift)
+
+        guard clickedRow >= 0 else {
+            gridCoordinator?.selectedCells.removeAll()
+            gridCoordinator?.selectedWholeRows.removeAll()
+            return
+        }
+
+        gridCoordinator?.handleCellClick(row: clickedRow, tableColumn: clickedCol, shift: shift)
+    }
 
     override func menu(for event: NSEvent) -> NSMenu? {
         let point = convert(event.locationInWindow, from: nil)
@@ -379,6 +504,7 @@ class DataGridTableView: NSTableView {
 
         let menu = NSMenu()
 
+        // Copy Cell
         if contextColumn >= 1 {
             let cellItem = NSMenuItem(title: "Copy Cell Value", action: #selector(DataGridCoordinator.copyCellAction(_:)), keyEquivalent: "")
             cellItem.target = coordinator
@@ -386,11 +512,13 @@ class DataGridTableView: NSTableView {
             menu.addItem(cellItem)
         }
 
+        // Copy Row
         let rowItem = NSMenuItem(title: "Copy Row", action: #selector(DataGridCoordinator.copyRowAction(_:)), keyEquivalent: "")
         rowItem.target = coordinator
         rowItem.image = NSImage(systemSymbolName: "arrow.right.doc.on.clipboard", accessibilityDescription: nil)
         menu.addItem(rowItem)
 
+        // Copy Column
         if contextColumn >= 1 {
             let colItem = NSMenuItem(title: "Copy Column", action: #selector(DataGridCoordinator.copyColumnAction(_:)), keyEquivalent: "")
             colItem.target = coordinator
@@ -400,12 +528,15 @@ class DataGridTableView: NSTableView {
 
         menu.addItem(.separator())
 
-        if selectedRowIndexes.count > 1 {
-            let selItem = NSMenuItem(title: "Copy Selected Rows (\(selectedRowIndexes.count))", action: #selector(DataGridCoordinator.copySelectedRowsAction(_:)), keyEquivalent: "")
+        // Copy Selection (if multi-cell or multi-row)
+        let selCount = coordinator.selectedCells.count + coordinator.selectedWholeRows.count
+        if selCount > 1 {
+            let selItem = NSMenuItem(title: "Copy Selection", action: #selector(DataGridCoordinator.copySelectedAction(_:)), keyEquivalent: "")
             selItem.target = coordinator
             menu.addItem(selItem)
         }
 
+        // Copy All
         let allItem = NSMenuItem(title: "Copy All with Headers", action: #selector(DataGridCoordinator.copyAllAction(_:)), keyEquivalent: "")
         allItem.target = coordinator
         menu.addItem(allItem)
@@ -428,13 +559,18 @@ class DataGridTableView: NSTableView {
     override func keyDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "c" {
             if event.modifierFlags.contains(.shift) {
-                gridCoordinator?.copySelectedWithHeaders()
+                gridCoordinator?.copyCurrentSelectionWithHeaders()
             } else {
-                gridCoordinator?.copySelected()
+                gridCoordinator?.copyCurrentSelection()
             }
             return
         }
         super.keyDown(with: event)
+    }
+
+    // Disable built-in row highlight drawing — we draw our own cell highlights
+    override func highlightSelection(inClipRect clipRect: NSRect) {
+        // intentionally empty
     }
 }
 
@@ -466,9 +602,9 @@ struct ResultsNSTableView: NSViewRepresentable {
         tableView.columnAutoresizingStyle = .noColumnAutoresizing
         tableView.allowsColumnReordering = true
         tableView.allowsColumnResizing = true
-        tableView.allowsMultipleSelection = true
+        tableView.allowsMultipleSelection = false
         tableView.backgroundColor = NSColor(red: 0.05, green: 0.07, blue: 0.09, alpha: 1)
-        tableView.selectionHighlightStyle = .regular
+        tableView.selectionHighlightStyle = .none  // we draw our own
         tableView.allowsEmptySelection = true
 
         let headerView = NSTableHeaderView()
@@ -495,6 +631,8 @@ struct ResultsNSTableView: NSViewRepresentable {
 
             coordinator.result = newResult
             coordinator.displayRowCount = min(newResult.rows.count, maxRows)
+            coordinator.selectedCells.removeAll()
+            coordinator.selectedWholeRows.removeAll()
             tableView.gridCoordinator = coordinator
 
             while tableView.tableColumns.count > 0 {
