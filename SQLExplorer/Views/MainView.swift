@@ -115,7 +115,8 @@ struct MainView: View {
                 appState.buildExplorerFromDatabases(appState.authService.databases)
             }
         }
-        .onChange(of: appState.authService.databases) { _, newDatabases in
+        .onReceive(appState.authService.$databases) { newDatabases in
+            guard !newDatabases.isEmpty else { return }
             appState.buildExplorerFromDatabases(newDatabases)
         }
         .safeAreaInset(edge: .bottom) {
