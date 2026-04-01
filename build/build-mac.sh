@@ -152,17 +152,25 @@ ENTITLEMENTS
 codesign --deep --force --sign - --entitlements "publish/entitlements.plist" "$APP_DIR" 2>/dev/null || true
 echo "Code signed with Keychain entitlements."
 
-# Create DMG
+# Create DMG — two-step: create read-write, then convert to compressed
 DMG_PATH="publish/SQLExplorer-${VERSION}-mac.dmg"
 STAGING="publish/dmg-staging"
+RW_DMG="publish/SQLExplorer-rw.dmg"
+rm -rf "$STAGING" "$RW_DMG"
 mkdir -p "$STAGING"
-cp -RL "$APP_DIR" "$STAGING/"
+ditto "$APP_DIR" "$STAGING/SQL Explorer.app"
 ln -sf /Applications "$STAGING/Applications"
 
-hdiutil create -volname "SQL Explorer" -srcfolder "$STAGING" \
-    -ov -format UDZO "$DMG_PATH"
+# Strip extended attributes that cause Finder Error -36
+xattr -rc "$STAGING/SQL Explorer.app" 2>/dev/null || true
 
+# Create uncompressed DMG first, then convert (avoids corruption)
+hdiutil create -volname "SQL Explorer" -srcfolder "$STAGING" \
+    -ov -format UDRW "$RW_DMG"
 rm -rf "$STAGING"
+
+hdiutil convert "$RW_DMG" -format UDZO -o "$DMG_PATH" -ov
+rm -f "$RW_DMG"
 
 echo ""
 echo "=== Build complete ==="
