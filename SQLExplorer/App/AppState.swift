@@ -415,39 +415,68 @@ class AppState: ObservableObject {
 
     // MARK: - Database Diagram (ERD)
 
-    /// Phase 1: Open the table picker (fast — just fetches table names)
+    /// Opens ERD window immediately with blank canvas, fetches table list in background
     func openERDPicker(databaseName: String, connectionId: UUID) async {
         let schema = ERDSchema()
         schema.databaseName = databaseName
         schema.connectionId = connectionId
-        schema.phase = .loading
         erdSchema = schema
 
+        // Fetch table list in background — canvas is already usable
         do {
-            let tableEntries = try await ERDService.listTables(
+            let entries = try await ERDService.listTables(
                 connectionManager: connectionManager, connectionId: connectionId)
-            schema.availableTables = tableEntries
-            schema.phase = .pickingTables
+            schema.availableTables = entries
+            schema.isLoadingTableList = false
         } catch {
-            schema.phase = .error(error.localizedDescription)
+            schema.isLoadingTableList = false
         }
     }
 
-    /// Phase 2: Generate diagram for selected tables
-    func generateERD() async {
+    /// Add a single table to the ERD canvas
+    func addTableToERD(_ entry: ERDTableEntry) async {
         guard let schema = erdSchema, let connId = schema.connectionId else { return }
-        schema.phase = .loading
+        guard !schema.tablesOnCanvas.contains(entry.fullName) else { return }
+
+        schema.isAddingTable = true
 
         do {
-            let (tables, relationships) = try await ERDService.loadSchema(
-                connectionManager: connectionManager,
-                connectionId: connId,
-                tableNames: schema.selectedTableNames)
-            schema.tables = tables
-            schema.relationships = relationships
-            schema.phase = .ready
-        } catch {
-            schema.phase = .error(error.localizedDescription)
+            let columns = try await ERDService.loadTableColumns(
+                connectionManager: connectionManager, connectionId: connId,
+                schemaName: entry.schema, tableName: entry.name)
+
+            // Position new table: find empty spot
+            let cols = max(Int(ceil(sqrt(Double(schema.tables.count + 1)))), 1)
+            let idx = schema.tables.count
+            let x = CGFloat(idx % cols) * 280 + 40
+            let y = CGFloat(idx / cols) * 240 + 40
+
+            let table = ERDTable(schema: entry.schema, name: entry.name,
+                                 columns: columns, position: CGPoint(x: x, y: y))
+            schema.tables.append(table)
+
+            // Refresh FK relationships between all tables on canvas
+            let names = schema.tablesOnCanvas
+            let rels = try await ERDService.loadRelationships(
+                connectionManager: connectionManager, connectionId: connId, tableNames: names)
+            schema.relationships = rels
+        } catch { }
+
+        schema.isAddingTable = false
+    }
+
+    /// Remove a table from the ERD canvas
+    func removeTableFromERD(_ table: ERDTable) async {
+        guard let schema = erdSchema, let connId = schema.connectionId else { return }
+        schema.tables.removeAll { $0.id == table.id }
+
+        // Refresh relationships
+        let names = schema.tablesOnCanvas
+        if let rels = try? await ERDService.loadRelationships(
+            connectionManager: connectionManager, connectionId: connId, tableNames: names) {
+            schema.relationships = rels
+        } else {
+            schema.relationships.removeAll { $0.fromTable == table.fullName || $0.toTable == table.fullName }
         }
     }
 
