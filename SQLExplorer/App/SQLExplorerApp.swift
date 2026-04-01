@@ -12,6 +12,13 @@ struct SQLExplorerApp: App {
         }
         .windowStyle(.automatic)
         .defaultSize(width: 1400, height: 900)
+
+        Window("Database Diagram", id: "erd") {
+            ERDWindowView()
+                .environmentObject(appState)
+                .frame(minWidth: 600, minHeight: 400)
+        }
+        .defaultSize(width: 1200, height: 800)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Query Tab") {

@@ -33,6 +33,12 @@ class DatabaseObject: Identifiable, ObservableObject {
     var environmentLabel: String?
     var serverFqdn: String?
 
+    // Column metadata (for objectType == .column)
+    var dataType: String = ""
+    var isPrimaryKey: Bool = false
+    var isForeignKey: Bool = false
+    var isNullable: Bool = true
+
     init(
         name: String,
         schema: String = "dbo",
@@ -59,7 +65,10 @@ class DatabaseObject: Identifiable, ObservableObject {
         case .view: return "eye"
         case .storedProcedure: return "gearshape"
         case .function: return "function"
-        case .column: return "line.3.horizontal"
+        case .column:
+            if isPrimaryKey { return "key.fill" }
+            if isForeignKey { return "link" }
+            return "line.3.horizontal"
         case .index: return "arrow.up.arrow.down"
         case .foreignKey: return "link"
         case .primaryKey: return "key"

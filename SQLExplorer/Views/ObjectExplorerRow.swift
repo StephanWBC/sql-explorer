@@ -3,6 +3,7 @@ import SwiftUI
 struct ObjectExplorerRow: View {
     @ObservedObject var node: DatabaseObject
     @EnvironmentObject var appState: AppState
+    @Environment(\.openWindow) private var openWindow
     @ObservedObject var userDataStore: UserDataStore
     var onConnect: ((DatabaseObject) -> Void)?
     var onDisconnect: ((DatabaseObject) -> Void)?
@@ -36,8 +37,22 @@ struct ObjectExplorerRow: View {
             // Name
             Text(node.name)
                 .font(.system(size: 12, weight: isGroupOrServer ? .semibold : .regular))
-                .foregroundStyle(node.isConnected || node.objectType == .server ? .primary : .secondary)
+                .foregroundStyle(node.objectType == .column ? .primary : (node.isConnected || node.objectType == .server ? .primary : .secondary))
                 .lineLimit(1)
+
+            // Column data type
+            if node.objectType == .column && !node.dataType.isEmpty {
+                Text(node.dataType)
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+
+                if !node.isNullable {
+                    Text("NOT NULL")
+                        .font(.system(size: 8, weight: .medium))
+                        .foregroundStyle(.orange.opacity(0.7))
+                }
+            }
 
             // Connecting spinner
             if node.isConnecting {
@@ -66,6 +81,10 @@ struct ObjectExplorerRow: View {
             if node.objectType == .database && node.isConnected && !node.isLoaded && node.children.isEmpty {
                 onExpand?(node)
             }
+            // Lazy-load columns when a table/view is first expanded
+            if (node.objectType == .table || node.objectType == .view) && node.isExpandable && !node.isLoaded && node.children.isEmpty {
+                onExpand?(node)
+            }
         }
         .onTapGesture(count: 2) {
             if node.objectType == .database {
@@ -89,6 +108,15 @@ struct ObjectExplorerRow: View {
                         onExpand?(node)
                     } label: {
                         Label("Refresh Schema", systemImage: "arrow.clockwise")
+                    }
+
+                    Button {
+                        if let connId = node.connectionId {
+                            Task { await appState.loadERD(databaseName: node.name, connectionId: connId) }
+                            openWindow(id: "erd")
+                        }
+                    } label: {
+                        Label("Database Diagram", systemImage: "rectangle.connected.to.line.below")
                     }
 
                     Divider()
@@ -222,6 +250,10 @@ struct ObjectExplorerRow: View {
         case .function: return .pink
         case .primaryKey: return .yellow
         case .foreignKey: return .cyan
+        case .column:
+            if node.isPrimaryKey { return .yellow }
+            if node.isForeignKey { return .cyan }
+            return .secondary
         default: return .secondary
         }
     }

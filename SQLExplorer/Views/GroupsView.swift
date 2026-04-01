@@ -2,6 +2,7 @@ import SwiftUI
 
 struct GroupsView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.openWindow) private var openWindow
     @ObservedObject var userDataStore: UserDataStore
     @Binding var selectedSidebarTab: SidebarTab
     @State private var isCreatingGroup = false
@@ -73,8 +74,18 @@ struct GroupsView: View {
                                         ForEach(db.children) { folder in
                                             if folder.isExpandable && !folder.children.isEmpty {
                                                 DisclosureGroup(isExpanded: expandedBinding(folder.id)) {
-                                                    ForEach(folder.children) { leaf in
-                                                        schemaRow(leaf)
+                                                    ForEach(folder.children) { item in
+                                                        if item.isExpandable {
+                                                            DisclosureGroup(isExpanded: expandedBinding(item.id)) {
+                                                                ForEach(item.children) { col in
+                                                                    schemaRow(col)
+                                                                }
+                                                            } label: {
+                                                                schemaRow(item)
+                                                            }
+                                                        } else {
+                                                            schemaRow(item)
+                                                        }
                                                     }
                                                 } label: {
                                                     schemaRow(folder)
@@ -175,9 +186,13 @@ struct GroupsView: View {
             onConnect: { db in Task { await appState.connectToDatabase(db) } },
             onDisconnect: { db in appState.disconnectFromDatabase(db) },
             onNewQuery: { db in appState.newQueryForDatabase(db) },
-            onExpand: { db in
-                db.isLoaded = false
-                Task { await appState.loadSchemaForDatabase(db) }
+            onExpand: { obj in
+                if obj.objectType == .table || obj.objectType == .view {
+                    Task { await appState.loadColumnsForTable(obj) }
+                } else {
+                    obj.isLoaded = false
+                    Task { await appState.loadSchemaForDatabase(obj) }
+                }
             }
         )
     }
@@ -191,6 +206,15 @@ struct GroupsView: View {
                 appState.newQueryForGroupMember(member)
             } label: {
                 Label("New Query", systemImage: "plus.rectangle")
+            }
+
+            if let connId = appState.connectionId(databaseName: member.databaseName, serverFqdn: member.serverFqdn) {
+                Button {
+                    Task { await appState.loadERD(databaseName: member.databaseName, connectionId: connId) }
+                    openWindow(id: "erd")
+                } label: {
+                    Label("Database Diagram", systemImage: "rectangle.connected.to.line.below")
+                }
             }
 
             Divider()

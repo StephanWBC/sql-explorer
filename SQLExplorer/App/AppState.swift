@@ -16,6 +16,7 @@ class AppState: ObservableObject {
 
     @Published var explorerNodes: [DatabaseObject] = []
     @Published var revealedNodeId: UUID?  // Set this to scroll to + expand a node
+    @Published var erdSchema: ERDSchema?
     @Published var queryTabs: [QueryTab] = []
     @Published var selectedTabId: UUID?
 
@@ -298,7 +299,9 @@ class AppState: ObservableObject {
                 "SELECT s.name + '.' + t.name FROM sys.tables t JOIN sys.schemas s ON t.schema_id = s.schema_id ORDER BY s.name, t.name",
                 connectionId: connId)
             for row in result.rows {
-                tablesFolder.children.append(DatabaseObject(name: row[0], objectType: .table))
+                let tableNode = DatabaseObject(name: row[0], objectType: .table, isExpandable: true)
+                tableNode.connectionId = connId
+                tablesFolder.children.append(tableNode)
             }
             tablesFolder.isLoaded = true
         } catch { }
@@ -308,7 +311,9 @@ class AppState: ObservableObject {
                 "SELECT s.name + '.' + v.name FROM sys.views v JOIN sys.schemas s ON v.schema_id = s.schema_id ORDER BY s.name, v.name",
                 connectionId: connId)
             for row in result.rows {
-                viewsFolder.children.append(DatabaseObject(name: row[0], objectType: .view))
+                let viewNode = DatabaseObject(name: row[0], objectType: .view, isExpandable: true)
+                viewNode.connectionId = connId
+                viewsFolder.children.append(viewNode)
             }
             viewsFolder.isLoaded = true
         } catch { }
@@ -340,6 +345,94 @@ class AppState: ObservableObject {
         // Rebuild IntelliSense completions with new schema
         schemaCache.updateFromExplorerNodes(explorerNodes)
         CompletionProvider.rebuild(schema: schemaCache)
+    }
+
+    // MARK: - Column Loading (lazy, on table expand)
+
+    func loadColumnsForTable(_ node: DatabaseObject) async {
+        guard (node.objectType == .table || node.objectType == .view),
+              let connId = node.connectionId, !node.isLoaded else { return }
+
+        // Parse "schema.table" from node name
+        let parts = node.name.split(separator: ".", maxSplits: 1)
+        let schemaName = parts.count == 2 ? String(parts[0]) : "dbo"
+        let tableName = parts.count == 2 ? String(parts[1]) : node.name
+
+        let sql = """
+            SELECT c.name, tp.name AS DataType, c.max_length, c.precision, c.scale, c.is_nullable,
+                   CASE WHEN ic.column_id IS NOT NULL THEN 1 ELSE 0 END AS IsPK,
+                   CASE WHEN fkc.parent_column_id IS NOT NULL THEN 1 ELSE 0 END AS IsFK
+            FROM sys.columns c
+            JOIN sys.types tp ON c.user_type_id = tp.user_type_id
+            LEFT JOIN sys.indexes i ON i.object_id = c.object_id AND i.is_primary_key = 1
+            LEFT JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.column_id = c.column_id
+            LEFT JOIN sys.foreign_key_columns fkc ON fkc.parent_object_id = c.object_id AND fkc.parent_column_id = c.column_id
+            WHERE c.object_id = OBJECT_ID('[\(schemaName)].[\(tableName)]')
+            ORDER BY c.column_id
+            """
+
+        do {
+            let result = try await connectionManager.executeQuery(sql, connectionId: connId)
+            var columns: [DatabaseObject] = []
+
+            for row in result.rows {
+                let colName = row[0]
+                let typeName = row[1]
+                let maxLen = Int(row[2]) ?? 0
+                let precision = Int(row[3]) ?? 0
+                let scale = Int(row[4]) ?? 0
+                let nullable = row[5] == "1" || row[5].lowercased() == "true"
+                let isPK = row[6] == "1"
+                let isFK = row[7] == "1"
+
+                // Build display type string
+                var typeStr = typeName
+                switch typeName.lowercased() {
+                case "nvarchar", "nchar":
+                    typeStr = maxLen == -1 ? "\(typeName)(MAX)" : "\(typeName)(\(maxLen / 2))"
+                case "varchar", "char", "varbinary":
+                    typeStr = maxLen == -1 ? "\(typeName)(MAX)" : "\(typeName)(\(maxLen))"
+                case "decimal", "numeric":
+                    typeStr = "\(typeName)(\(precision),\(scale))"
+                default: break
+                }
+
+                let colNode = DatabaseObject(name: colName, objectType: .column)
+                colNode.dataType = typeStr
+                colNode.isPrimaryKey = isPK
+                colNode.isForeignKey = isFK
+                colNode.isNullable = nullable
+                columns.append(colNode)
+            }
+
+            node.children = columns
+            node.isLoaded = true
+            objectWillChange.send()
+        } catch {
+            statusMessage = "Failed to load columns: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Database Diagram (ERD)
+
+    func loadERD(databaseName: String, connectionId: UUID) async {
+        let schema = ERDSchema()
+        schema.databaseName = databaseName
+        schema.isLoading = true
+        erdSchema = schema
+
+        do {
+            let (tables, relationships) = try await ERDService.loadSchema(
+                connectionManager: connectionManager,
+                connectionId: connectionId,
+                databaseName: databaseName)
+            schema.tables = tables
+            schema.relationships = relationships
+            schema.isLoading = false
+        } catch {
+            schema.errorMessage = error.localizedDescription
+            schema.isLoading = false
+        }
     }
 
     // MARK: - Legacy (manual connections)

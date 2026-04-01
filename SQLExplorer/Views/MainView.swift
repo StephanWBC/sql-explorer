@@ -16,6 +16,7 @@ enum SidebarTab: String, CaseIterable {
 
 struct MainView: View {
     @EnvironmentObject var appState: AppState
+    @Environment(\.openWindow) private var openWindow
     @State private var explorerWidth: CGFloat = 280
     @State private var selectedSidebarTab: SidebarTab = .explorer
     @State private var expandedNodes: Set<UUID> = []
@@ -176,6 +177,17 @@ struct MainView: View {
             } label: {
                 Label("Show in Explorer", systemImage: "sidebar.left")
             }
+
+            Divider()
+
+            Button {
+                if let connId = db.connectionId {
+                    Task { await appState.loadERD(databaseName: db.name, connectionId: connId) }
+                    openWindow(id: "erd")
+                }
+            } label: {
+                Label("Database Diagram", systemImage: "rectangle.connected.to.line.below")
+            }
         }
         .onTapGesture(count: 2) {
             appState.newQueryForDatabase(db)
@@ -232,9 +244,13 @@ struct MainView: View {
             onConnect: { db in Task { await appState.connectToDatabase(db) } },
             onDisconnect: { db in appState.disconnectFromDatabase(db) },
             onNewQuery: { db in appState.newQueryForDatabase(db) },
-            onExpand: { db in
-                db.isLoaded = false
-                Task { await appState.loadSchemaForDatabase(db) }
+            onExpand: { obj in
+                if obj.objectType == .table || obj.objectType == .view {
+                    Task { await appState.loadColumnsForTable(obj) }
+                } else {
+                    obj.isLoaded = false
+                    Task { await appState.loadSchemaForDatabase(obj) }
+                }
             }
         )
         .id(node.id)
@@ -287,17 +303,27 @@ struct MainView: View {
                                 ForEach(server.children) { db in
                                     if db.isExpandable && !db.children.isEmpty {
                                         DisclosureGroup(isExpanded: expandedBinding(db.id)) {
-                                            ForEach(db.children) { child in
-                                                if child.isExpandable && !child.children.isEmpty {
-                                                    DisclosureGroup(isExpanded: expandedBinding(child.id)) {
-                                                        ForEach(child.children) { leaf in
-                                                            explorerRow(leaf)
+                                            ForEach(db.children) { folder in
+                                                if folder.isExpandable && !folder.children.isEmpty {
+                                                    DisclosureGroup(isExpanded: expandedBinding(folder.id)) {
+                                                        ForEach(folder.children) { item in
+                                                            if item.isExpandable {
+                                                                DisclosureGroup(isExpanded: expandedBinding(item.id)) {
+                                                                    ForEach(item.children) { col in
+                                                                        explorerRow(col)
+                                                                    }
+                                                                } label: {
+                                                                    explorerRow(item)
+                                                                }
+                                                            } else {
+                                                                explorerRow(item)
+                                                            }
                                                         }
                                                     } label: {
-                                                        explorerRow(child)
+                                                        explorerRow(folder)
                                                     }
                                                 } else {
-                                                    explorerRow(child)
+                                                    explorerRow(folder)
                                                 }
                                             }
                                         } label: {
