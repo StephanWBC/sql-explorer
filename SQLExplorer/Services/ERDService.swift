@@ -24,7 +24,7 @@ enum ERDService {
             LEFT JOIN sys.indexes i ON i.object_id = c.object_id AND i.is_primary_key = 1
             LEFT JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.column_id = c.column_id
             LEFT JOIN sys.foreign_key_columns fkc ON fkc.parent_object_id = c.object_id AND fkc.parent_column_id = c.column_id
-            WHERE c.object_id = OBJECT_ID('[\(schemaName)].[\(tableName)]')
+            WHERE c.object_id = \(SQLEscaping.objectIdRef(schema: schemaName, table: tableName))
             ORDER BY c.column_id
             """
         let result = try await connectionManager.executeQuery(sql, connectionId: connectionId)

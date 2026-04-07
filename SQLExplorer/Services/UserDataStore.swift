@@ -5,6 +5,7 @@ class UserDataStore: ObservableObject {
     @Published var favorites: [FavoriteDatabase] = []
     @Published var groups: [DatabaseGroup] = []
     @Published var savedQueries: [SavedQuery] = []
+    @Published var queryHistory: [QueryHistoryEntry] = []
 
     private static let storeDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".sqlexplorer")
@@ -14,22 +15,28 @@ class UserDataStore: ObservableObject {
         var favorites: [FavoriteDatabase] = []
         var groups: [DatabaseGroup] = []
         var savedQueries: [SavedQuery] = []
+        var queryHistory: [QueryHistoryEntry] = []
     }
 
     init() { load() }
 
     func load() {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
         guard let data = try? Data(contentsOf: Self.file),
-              let store = try? JSONDecoder().decode(StoreData.self, from: data) else { return }
+              let store = try? decoder.decode(StoreData.self, from: data) else { return }
         favorites = store.favorites
         groups = store.groups
         savedQueries = store.savedQueries
+        queryHistory = store.queryHistory
     }
 
     func save() {
-        let store = StoreData(favorites: favorites, groups: groups, savedQueries: savedQueries)
+        let store = StoreData(favorites: favorites, groups: groups, savedQueries: savedQueries, queryHistory: queryHistory)
         try? FileManager.default.createDirectory(at: Self.storeDir, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(store) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        if let data = try? encoder.encode(store) {
             try? data.write(to: Self.file, options: .atomic)
         }
     }
@@ -107,6 +114,21 @@ class UserDataStore: ObservableObject {
 
     func deleteSavedQuery(_ id: UUID) {
         savedQueries.removeAll { $0.id == id }
+        save()
+    }
+
+    // MARK: - Query History
+
+    func addHistoryEntry(_ entry: QueryHistoryEntry) {
+        queryHistory.insert(entry, at: 0)
+        if queryHistory.count > 100 {
+            queryHistory = Array(queryHistory.prefix(100))
+        }
+        save()
+    }
+
+    func clearHistory() {
+        queryHistory.removeAll()
         save()
     }
 

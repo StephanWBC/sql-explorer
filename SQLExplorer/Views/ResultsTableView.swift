@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 // MARK: - SwiftUI wrapper
 
@@ -448,6 +449,85 @@ class DataGridCoordinator: NSObject, NSTableViewDataSource, NSTableViewDelegate 
         flashCopied()
     }
 
+    @objc func copyAsJSONAction(_ sender: Any?) {
+        let rowIndices: [Int]
+        if !selectedWholeRows.isEmpty {
+            rowIndices = selectedWholeRows.sorted()
+        } else {
+            rowIndices = Array(0..<displayRowCount)
+        }
+
+        var jsonRows: [[String: Any]] = []
+        for rowIdx in rowIndices {
+            guard rowIdx < result.rows.count else { continue }
+            var dict: [String: Any] = [:]
+            for (colIdx, col) in result.columns.enumerated() {
+                let val = result.rows[rowIdx][colIdx]
+                dict[col.name] = val == "NULL" ? NSNull() : val
+            }
+            jsonRows.append(dict)
+        }
+
+        if let data = try? JSONSerialization.data(withJSONObject: jsonRows, options: [.prettyPrinted, .sortedKeys]),
+           let jsonString = String(data: data, encoding: .utf8) {
+            copyToClipboard(jsonString)
+            statusText.wrappedValue = "Copied as JSON (\(rowIndices.count) rows)"
+            flashCopied()
+        }
+    }
+
+    @objc func exportAsCSVAction(_ sender: Any?) {
+        let panel = NSSavePanel()
+        panel.title = "Export as CSV"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        panel.nameFieldStringValue = "export.csv"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        let header = result.columns.map { csvEscape($0.name) }.joined(separator: ",")
+        let rows = (0..<displayRowCount).map { rowIdx in
+            result.rows[rowIdx].map { csvEscape($0) }.joined(separator: ",")
+        }
+        let content = ([header] + rows).joined(separator: "\n")
+
+        do {
+            try content.write(to: url, atomically: true, encoding: .utf8)
+            statusText.wrappedValue = "Exported \(displayRowCount) rows to \(url.lastPathComponent)"
+            flashCopied()
+        } catch {
+            statusText.wrappedValue = "Export failed: \(error.localizedDescription)"
+        }
+    }
+
+    @objc func exportAsJSONAction(_ sender: Any?) {
+        let panel = NSSavePanel()
+        panel.title = "Export as JSON"
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "export.json"
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        var jsonRows: [[String: Any]] = []
+        for rowIdx in 0..<displayRowCount {
+            guard rowIdx < result.rows.count else { continue }
+            var dict: [String: Any] = [:]
+            for (colIdx, col) in result.columns.enumerated() {
+                let val = result.rows[rowIdx][colIdx]
+                dict[col.name] = val == "NULL" ? NSNull() : val
+            }
+            jsonRows.append(dict)
+        }
+
+        do {
+            let data = try JSONSerialization.data(withJSONObject: jsonRows, options: [.prettyPrinted, .sortedKeys])
+            try data.write(to: url, options: .atomic)
+            statusText.wrappedValue = "Exported \(displayRowCount) rows to \(url.lastPathComponent)"
+            flashCopied()
+        } catch {
+            statusText.wrappedValue = "Export failed: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: Helpers
 
     func copyToClipboard(_ string: String) {
@@ -552,6 +632,23 @@ class DataGridTableView: NSTableView {
         insertItem.target = coordinator
         insertItem.image = NSImage(systemSymbolName: "plus.square", accessibilityDescription: nil)
         menu.addItem(insertItem)
+
+        let jsonItem = NSMenuItem(title: "Copy as JSON", action: #selector(DataGridCoordinator.copyAsJSONAction(_:)), keyEquivalent: "")
+        jsonItem.target = coordinator
+        jsonItem.image = NSImage(systemSymbolName: "curlybraces", accessibilityDescription: nil)
+        menu.addItem(jsonItem)
+
+        menu.addItem(.separator())
+
+        let exportCSVItem = NSMenuItem(title: "Export to CSV File...", action: #selector(DataGridCoordinator.exportAsCSVAction(_:)), keyEquivalent: "")
+        exportCSVItem.target = coordinator
+        exportCSVItem.image = NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: nil)
+        menu.addItem(exportCSVItem)
+
+        let exportJSONItem = NSMenuItem(title: "Export to JSON File...", action: #selector(DataGridCoordinator.exportAsJSONAction(_:)), keyEquivalent: "")
+        exportJSONItem.target = coordinator
+        exportJSONItem.image = NSImage(systemSymbolName: "square.and.arrow.up", accessibilityDescription: nil)
+        menu.addItem(exportJSONItem)
 
         return menu
     }

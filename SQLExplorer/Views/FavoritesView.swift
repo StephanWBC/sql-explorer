@@ -6,6 +6,7 @@ struct FavoritesView: View {
     @ObservedObject var userDataStore: UserDataStore
     @Binding var selectedSidebarTab: SidebarTab
     @State private var expandedNodes: Set<UUID> = []
+    @State private var favoriteToRemove: FavoriteDatabase?
 
     var body: some View {
         if userDataStore.favorites.isEmpty {
@@ -71,6 +72,24 @@ struct FavoritesView: View {
                 }
             }
             .listStyle(.sidebar)
+            .confirmationDialog(
+                "Remove Favorite",
+                isPresented: Binding(
+                    get: { favoriteToRemove != nil },
+                    set: { if !$0 { favoriteToRemove = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                Button("Remove", role: .destructive) {
+                    if let fav = favoriteToRemove {
+                        userDataStore.removeFavorite(fav.id)
+                    }
+                    favoriteToRemove = nil
+                }
+                Button("Cancel", role: .cancel) { favoriteToRemove = nil }
+            } message: {
+                Text("Remove \"\(favoriteToRemove?.displayName ?? "")\" from favorites?")
+            }
         }
     }
 
@@ -186,7 +205,7 @@ struct FavoritesView: View {
         Divider()
 
         Button(role: .destructive) {
-            userDataStore.removeFavorite(fav.id)
+            favoriteToRemove = fav
         } label: {
             Label("Remove from Favorites", systemImage: "star.slash")
         }

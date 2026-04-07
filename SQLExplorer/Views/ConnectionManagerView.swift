@@ -6,6 +6,7 @@ struct ConnectionManagerView: View {
 
     @State private var selectedConnection: SavedConnection?
     @State private var selectedGroup: ConnectionGroup?
+    @State private var showDeleteConfirmation = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -74,8 +75,7 @@ struct ConnectionManagerView: View {
                         GroupBox("Actions") {
                             VStack(alignment: .leading, spacing: 6) {
                                 Button("Delete Connection", role: .destructive) {
-                                    appState.connectionStore.deleteConnection(conn.id)
-                                    selectedConnection = nil
+                                    showDeleteConfirmation = true
                                 }
 
                                 Divider()
@@ -117,6 +117,21 @@ struct ConnectionManagerView: View {
             .padding()
         }
         .frame(width: 700, height: 500)
+        .confirmationDialog(
+            "Delete Connection",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                if let conn = selectedConnection {
+                    appState.connectionStore.deleteConnection(conn.id)
+                    selectedConnection = nil
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Are you sure you want to delete \"\(selectedConnection?.name ?? "")\"? This cannot be undone.")
+        }
     }
 
     private func moveConnection(_ conn: SavedConnection, to groupId: UUID?) {

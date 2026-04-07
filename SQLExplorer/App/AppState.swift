@@ -288,11 +288,14 @@ class AppState: ObservableObject {
     func loadSchemaForDatabase(_ node: DatabaseObject) async {
         guard node.objectType == .database, node.isConnected,
               let connId = node.connectionId, !node.isLoaded else { return }
+        AppLogger.schema.info("Loading schema for \(node.name)")
 
         let tablesFolder = DatabaseObject(name: "Tables", objectType: .folder, isExpandable: true)
         let viewsFolder = DatabaseObject(name: "Views", objectType: .folder, isExpandable: true)
         let procsFolder = DatabaseObject(name: "Stored Procedures", objectType: .folder, isExpandable: true)
         let funcsFolder = DatabaseObject(name: "Functions", objectType: .folder, isExpandable: true)
+
+        var schemaErrors: [String] = []
 
         do {
             let result = try await connectionManager.executeQuery(
@@ -304,7 +307,7 @@ class AppState: ObservableObject {
                 tablesFolder.children.append(tableNode)
             }
             tablesFolder.isLoaded = true
-        } catch { }
+        } catch { schemaErrors.append("Tables") }
 
         do {
             let result = try await connectionManager.executeQuery(
@@ -316,7 +319,7 @@ class AppState: ObservableObject {
                 viewsFolder.children.append(viewNode)
             }
             viewsFolder.isLoaded = true
-        } catch { }
+        } catch { schemaErrors.append("Views") }
 
         do {
             let result = try await connectionManager.executeQuery(
@@ -326,7 +329,7 @@ class AppState: ObservableObject {
                 procsFolder.children.append(DatabaseObject(name: row[0], objectType: .storedProcedure))
             }
             procsFolder.isLoaded = true
-        } catch { }
+        } catch { schemaErrors.append("Stored Procedures") }
 
         do {
             let result = try await connectionManager.executeQuery(
@@ -336,11 +339,15 @@ class AppState: ObservableObject {
                 funcsFolder.children.append(DatabaseObject(name: row[0], objectType: .function))
             }
             funcsFolder.isLoaded = true
-        } catch { }
+        } catch { schemaErrors.append("Functions") }
 
         node.children = [tablesFolder, viewsFolder, procsFolder, funcsFolder]
         node.isLoaded = true
         objectWillChange.send()
+
+        if !schemaErrors.isEmpty {
+            statusMessage = "Schema loaded with errors (\(schemaErrors.joined(separator: ", ")) failed)"
+        }
 
         // Rebuild IntelliSense completions with new schema
         schemaCache.updateFromExplorerNodes(explorerNodes)
@@ -367,7 +374,7 @@ class AppState: ObservableObject {
             LEFT JOIN sys.indexes i ON i.object_id = c.object_id AND i.is_primary_key = 1
             LEFT JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.column_id = c.column_id
             LEFT JOIN sys.foreign_key_columns fkc ON fkc.parent_object_id = c.object_id AND fkc.parent_column_id = c.column_id
-            WHERE c.object_id = OBJECT_ID('[\(schemaName)].[\(tableName)]')
+            WHERE c.object_id = \(SQLEscaping.objectIdRef(schema: schemaName, table: tableName))
             ORDER BY c.column_id
             """
 
@@ -460,7 +467,9 @@ class AppState: ObservableObject {
             let rels = try await ERDService.loadRelationships(
                 connectionManager: connectionManager, connectionId: connId, tableNames: names)
             schema.relationships = rels
-        } catch { }
+        } catch {
+            statusMessage = "Failed to add table to diagram: \(error.localizedDescription)"
+        }
 
         schema.isAddingTable = false
     }

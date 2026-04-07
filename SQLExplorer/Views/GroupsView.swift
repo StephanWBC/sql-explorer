@@ -10,6 +10,9 @@ struct GroupsView: View {
     @State private var editingAlias: UUID?
     @State private var aliasText = ""
     @State private var expandedNodes: Set<UUID> = []
+    @State private var groupToDelete: DatabaseGroup?
+    @State private var memberToRemoveGroupId: UUID?
+    @State private var memberToRemove: GroupMember?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -137,7 +140,7 @@ struct GroupsView: View {
                             }
                             .contextMenu {
                                 Button(role: .destructive) {
-                                    userDataStore.removeGroup(group.id)
+                                    groupToDelete = group
                                 } label: {
                                     Label("Delete Group", systemImage: "trash")
                                 }
@@ -146,6 +149,41 @@ struct GroupsView: View {
                     }
                 }
                 .listStyle(.sidebar)
+                .confirmationDialog(
+                    "Delete Group",
+                    isPresented: Binding(
+                        get: { groupToDelete != nil },
+                        set: { if !$0 { groupToDelete = nil } }
+                    ),
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete", role: .destructive) {
+                        if let g = groupToDelete { userDataStore.removeGroup(g.id) }
+                        groupToDelete = nil
+                    }
+                    Button("Cancel", role: .cancel) { groupToDelete = nil }
+                } message: {
+                    Text("Delete group \"\(groupToDelete?.name ?? "")\" and all its members? This cannot be undone.")
+                }
+                .confirmationDialog(
+                    "Remove from Group",
+                    isPresented: Binding(
+                        get: { memberToRemove != nil },
+                        set: { if !$0 { memberToRemove = nil; memberToRemoveGroupId = nil } }
+                    ),
+                    titleVisibility: .visible
+                ) {
+                    Button("Remove", role: .destructive) {
+                        if let groupId = memberToRemoveGroupId, let member = memberToRemove {
+                            userDataStore.removeFromGroup(groupId: groupId, memberId: member.id)
+                        }
+                        memberToRemove = nil
+                        memberToRemoveGroupId = nil
+                    }
+                    Button("Cancel", role: .cancel) { memberToRemove = nil; memberToRemoveGroupId = nil }
+                } message: {
+                    Text("Remove \"\(memberToRemove?.alias ?? "")\" from this group?")
+                }
             }
         }
     }
@@ -251,7 +289,8 @@ struct GroupsView: View {
         }
 
         Button(role: .destructive) {
-            userDataStore.removeFromGroup(groupId: group.id, memberId: member.id)
+            memberToRemoveGroupId = group.id
+            memberToRemove = member
         } label: {
             Label("Remove from Group", systemImage: "minus.circle")
         }

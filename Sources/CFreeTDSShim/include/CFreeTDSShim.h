@@ -12,4 +12,9 @@ void swift_DBSETLAPP(LOGINREC *login, const char *app);
 // Cancel an in-progress query (safe to call from a different thread)
 RETCODE swift_dbcancel(DBPROCESS *dbproc);
 
+// FreeTDS error/message handler registration and retrieval
+void swift_install_error_handlers(void);
+const char* swift_get_last_error(void);
+void swift_clear_last_error(void);
+
 #endif

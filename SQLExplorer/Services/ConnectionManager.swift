@@ -16,6 +16,7 @@ class ConnectionManager: ObservableObject {
 
     func connect(_ info: ConnectionInfo) async throws -> UUID {
         let connId = info.id
+        AppLogger.connection.info("Connecting to \(info.server)/\(info.database) via \(info.authType.rawValue)")
 
         if info.authType == .entraIdInteractive {
             // ODBC with access token
@@ -28,6 +29,7 @@ class ConnectionManager: ObservableObject {
         connectionInfos[connId] = info
         activeConnectionIds.insert(connId)
         isConnected = true
+        AppLogger.connection.info("Connected: \(connId)")
         return connId
     }
 
@@ -96,6 +98,7 @@ class ConnectionManager: ObservableObject {
     }
 
     func disconnect(_ connectionId: UUID) {
+        AppLogger.connection.info("Disconnecting \(connectionId)")
         queue.async { [self] in
             if let conn = odbcConnections.removeValue(forKey: connectionId) {
                 _ = conn // deinit handles disconnect
@@ -115,7 +118,8 @@ class ConnectionManager: ObservableObject {
 
     /// Execute a query
     func executeQuery(_ sql: String, connectionId: UUID) async throws -> QueryResult {
-        try await withCheckedThrowingContinuation { continuation in
+        AppLogger.query.debug("Executing query on \(connectionId): \(sql.prefix(200))")
+        return try await withCheckedThrowingContinuation { continuation in
             queue.async { [self] in
                 // Try ODBC first
                 if let conn = odbcConnections[connectionId] {

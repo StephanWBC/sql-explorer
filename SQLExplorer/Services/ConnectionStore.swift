@@ -39,7 +39,7 @@ class ConnectionStore: ObservableObject {
                 connections = conns
             }
         } catch {
-            print("[ConnectionStore] Load error: \(error)")
+            AppLogger.connection.error("ConnectionStore load failed: \(error.localizedDescription)")
         }
     }
 
@@ -53,7 +53,7 @@ class ConnectionStore: ObservableObject {
             let data = try encoder.encode(store)
             try data.write(to: Self.storeFile, options: .atomic)
         } catch {
-            print("[ConnectionStore] Save error: \(error)")
+            AppLogger.connection.error("ConnectionStore save failed: \(error.localizedDescription)")
         }
     }
 

@@ -10,6 +10,7 @@ final class FreeTDSBridge: @unchecked Sendable {
 
     private init() {
         dbinit()
+        swift_install_error_handlers()
     }
 
     deinit {
@@ -143,9 +144,9 @@ final class FreeTDSBridge: @unchecked Sendable {
     }
 
     private func getLastError(_ proc: OpaquePointer) -> String? {
-        // FreeTDS stores errors in a global buffer — not easily accessible per-connection
-        // Return nil and let the caller use a generic message
-        return nil
+        defer { swift_clear_last_error() }
+        guard let cStr = swift_get_last_error() else { return nil }
+        return String(cString: cStr)
     }
 }
 

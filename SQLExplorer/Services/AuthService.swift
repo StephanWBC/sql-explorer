@@ -46,6 +46,7 @@ class AuthService: ObservableObject {
     // MARK: - Session Restore
 
     func tryRestoreSession() async {
+        AppLogger.auth.info("Attempting session restore")
         guard let app = application else { return }
 
         do {
@@ -69,6 +70,7 @@ class AuthService: ObservableObject {
     // MARK: - Sign In / Out
 
     func signIn() async {
+        AppLogger.auth.info("Interactive sign-in started")
         guard let app = application else { return }
 
         do {
@@ -87,6 +89,7 @@ class AuthService: ObservableObject {
 
             await discoverSubscriptions()
         } catch {
+            AppLogger.auth.error("Sign-in failed: \(error.localizedDescription)")
             errorMessage = "Sign-in failed: \(error.localizedDescription)"
             isSignedIn = false
         }

@@ -5,6 +5,7 @@ struct QueryEditorView: View {
     @EnvironmentObject var appState: AppState
     @State private var showingSaveDialog = false
     @State private var saveName = ""
+    @State private var showingHistory = false
 
     var body: some View {
         VSplitView {
@@ -61,6 +62,16 @@ struct QueryEditorView: View {
                     }
                     .buttonStyle(.plain)
                     .help("Save query (⌘S)")
+
+                    // History
+                    Button {
+                        showingHistory = true
+                    } label: {
+                        Image(systemName: "clock.arrow.circlepath")
+                            .font(.system(size: 11))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Query history")
 
                     Spacer()
 
@@ -160,6 +171,11 @@ struct QueryEditorView: View {
         } message: {
             Text("Give this query a name to save it.")
         }
+        .sheet(isPresented: $showingHistory) {
+            QueryHistoryView(userDataStore: appState.userDataStore) { entry in
+                tab.sql = entry.sql
+            }
+        }
     }
 
     private func executeQuery() async {
@@ -177,6 +193,17 @@ struct QueryEditorView: View {
             tab.result = QueryResult(errorMessage: error.localizedDescription)
             appState.statusMessage = "Error: \(error.localizedDescription)"
         }
+
+        // Record in query history
+        let entry = QueryHistoryEntry(
+            sql: tab.sql,
+            database: tab.database,
+            serverName: tab.serverName,
+            rowCount: tab.result?.rows.count ?? 0,
+            elapsedMs: tab.result?.elapsedMs ?? 0,
+            wasError: tab.result?.isError ?? false
+        )
+        appState.userDataStore.addHistoryEntry(entry)
 
         tab.isExecuting = false
     }
