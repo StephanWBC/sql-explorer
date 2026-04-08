@@ -16,6 +16,26 @@
       "program": "${workspaceFolder}/.build/release/SQLExplorer",
       "preLaunchTask": "swift-build-release",
       "cwd": "${workspaceFolder}"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:SqlStudio}",
+      "name": "Debug SQLExplorer",
+      "target": "SQLExplorer",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug SQLExplorer"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:SqlStudio}",
+      "name": "Release SQLExplorer",
+      "target": "SQLExplorer",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release SQLExplorer"
     }
   ]
 }
