@@ -226,7 +226,7 @@ enum ODBCError: LocalizedError {
         case .envFailed: return "ODBC environment setup failed"
         case .allocFailed: return "ODBC handle allocation failed"
         case .connectionFailed(let msg): return "Connection failed: \(msg)"
-        case .queryFailed(let msg): return "Query failed: \(msg)"
+        case .queryFailed(let msg): return msg
         }
     }
 }

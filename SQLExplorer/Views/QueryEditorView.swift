@@ -128,12 +128,25 @@ struct QueryEditorView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let result = tab.result {
                     if result.isError {
-                        ScrollView {
-                            Text(result.errorMessage ?? "Unknown error")
-                                .font(.system(.body, design: .monospaced))
-                                .foregroundStyle(.red)
-                                .padding()
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                        if let enriched = result.enrichedError {
+                            ErrorPanelView(
+                                enrichedError: enriched,
+                                onSuggestionTap: { suggestion in
+                                    handleSuggestion(suggestion)
+                                },
+                                onCopy: { text in
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(text, forType: .string)
+                                }
+                            )
+                        } else {
+                            ScrollView {
+                                Text(result.errorMessage ?? "Unknown error")
+                                    .font(.body)
+                                    .foregroundStyle(.red)
+                                    .padding()
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
                         }
                     } else if result.hasResults {
                         ResultsTableView(result: result)
@@ -179,22 +192,52 @@ struct QueryEditorView: View {
     }
 
     private func executeQuery() async {
-        guard !tab.sql.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        let trimmed = tab.sql.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        // Pre-validate using schema data
+        let issues = SQLPreValidator.validate(trimmed, schema: appState.schemaCache)
+        let blockingErrors = issues.filter { $0.severity == .error }
+
+        if !blockingErrors.isEmpty {
+            let message = blockingErrors.first!.message
+            let enriched = ErrorEnricher.enrich(
+                sanitizedMessage: message,
+                sql: trimmed,
+                schema: appState.schemaCache,
+                validationIssues: issues)
+            tab.result = QueryResult(errorMessage: message, enrichedError: enriched, validationIssues: issues)
+            appState.statusMessage = "Validation error"
+            recordHistory()
+            return
+        }
 
         tab.isExecuting = true
         appState.statusMessage = "Executing on \(tab.database)..."
 
         do {
-            let result = try await appState.connectionManager.executeQuery(
+            var result = try await appState.connectionManager.executeQuery(
                 tab.sql, connectionId: tab.connectionId)
+            // Attach any pre-validation warnings to successful results
+            result.validationIssues = issues.filter { $0.severity == .warning }
             tab.result = result
             appState.statusMessage = "\(result.rows.count) row(s) in \(result.elapsedMs)ms"
         } catch {
-            tab.result = QueryResult(errorMessage: error.localizedDescription)
-            appState.statusMessage = "Error: \(error.localizedDescription)"
+            let sanitized = ErrorSanitizer.sanitize(error.localizedDescription)
+            let enriched = ErrorEnricher.enrich(
+                sanitizedMessage: sanitized,
+                sql: trimmed,
+                schema: appState.schemaCache,
+                validationIssues: issues)
+            tab.result = QueryResult(errorMessage: sanitized, enrichedError: enriched, validationIssues: issues)
+            appState.statusMessage = sanitized
         }
 
-        // Record in query history
+        recordHistory()
+        tab.isExecuting = false
+    }
+
+    private func recordHistory() {
         let entry = QueryHistoryEntry(
             sql: tab.sql,
             database: tab.database,
@@ -204,8 +247,21 @@ struct QueryEditorView: View {
             wasError: tab.result?.isError ?? false
         )
         appState.userDataStore.addHistoryEntry(entry)
+    }
 
-        tab.isExecuting = false
+    private func handleSuggestion(_ suggestion: ErrorSuggestion) {
+        switch suggestion.action {
+        case .insertText(let text):
+            if !tab.sql.hasSuffix(" ") && !tab.sql.hasSuffix("\n") {
+                tab.sql += " "
+            }
+            tab.sql += text
+        case .replaceQuery(let text):
+            tab.sql = text
+        case .copyText(let text):
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+        }
     }
 }
 

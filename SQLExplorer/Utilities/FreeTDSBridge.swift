@@ -157,7 +157,7 @@ enum FreeTDSError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .connectionFailed(let msg): return "Connection failed: \(msg)"
-        case .queryFailed(let msg): return "Query failed: \(msg)"
+        case .queryFailed(let msg): return msg
         }
     }
 }

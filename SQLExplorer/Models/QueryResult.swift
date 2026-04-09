@@ -13,6 +13,8 @@ struct QueryResult {
     var elapsedMs: Int64 = 0
     var messages: [String] = []
     var errorMessage: String?
+    var enrichedError: EnrichedError?
+    var validationIssues: [SQLValidationIssue] = []
 
     var isError: Bool { errorMessage != nil }
     var hasResults: Bool { !columns.isEmpty }
