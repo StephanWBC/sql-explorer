@@ -287,7 +287,37 @@ struct MainView: View {
                     if !connectedDatabases.isEmpty {
                         Section {
                             ForEach(connectedDatabases) { db in
-                                connectedDbLabel(db)
+                                if db.isExpandable && !db.children.isEmpty {
+                                    DisclosureGroup(isExpanded: expandedBinding(db.id)) {
+                                        ForEach(db.children) { folder in
+                                            if folder.isExpandable && !folder.children.isEmpty {
+                                                DisclosureGroup(isExpanded: expandedBinding(folder.id)) {
+                                                    ForEach(folder.children) { item in
+                                                        if item.isExpandable {
+                                                            DisclosureGroup(isExpanded: expandedBinding(item.id)) {
+                                                                ForEach(item.children) { col in
+                                                                    explorerRow(col)
+                                                                }
+                                                            } label: {
+                                                                explorerRow(item)
+                                                            }
+                                                        } else {
+                                                            explorerRow(item)
+                                                        }
+                                                    }
+                                                } label: {
+                                                    explorerRow(folder)
+                                                }
+                                            } else {
+                                                explorerRow(folder)
+                                            }
+                                        }
+                                    } label: {
+                                        connectedDbLabel(db)
+                                    }
+                                } else {
+                                    connectedDbLabel(db)
+                                }
                             }
                         } header: {
                             Text("CONNECTED")
