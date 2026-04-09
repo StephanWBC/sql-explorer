@@ -335,6 +335,11 @@ struct SQLTextEditor: NSViewRepresentable {
 
         textView.string = text
 
+        // Auto-focus the text view so user can start typing immediately
+        DispatchQueue.main.async {
+            textView.window?.makeFirstResponder(textView)
+        }
+
         return scrollView
     }
 
