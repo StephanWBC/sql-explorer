@@ -37,11 +37,7 @@ if [ -d "$MSAL_FW" ]; then
     # Use -RL to dereference symlinks — prevents Error -36 in Finder copy
     cp -RL "$MSAL_FW" "$APP_DIR/Contents/Frameworks/"
 
-    # Remove duplicated Versions directory (cp -RL expands symlinks into full copies)
-    # The top-level Headers/MSAL/Modules/Resources are already the real files
-    rm -rf "$APP_DIR/Contents/Frameworks/MSAL.framework/Versions"
-
-    # Strip all extended attributes from the framework
+    # Strip all extended attributes recursively (prevents Error -36)
     xattr -rc "$APP_DIR/Contents/Frameworks/MSAL.framework" 2>/dev/null || true
 
     # Fix rpath
