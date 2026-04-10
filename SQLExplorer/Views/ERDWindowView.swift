@@ -24,82 +24,11 @@ struct ERDWindowView: View {
                         .frame(minWidth: 220, idealWidth: 260, maxWidth: 350)
                     }
 
-                    // Canvas
-                    VStack(spacing: 0) {
-                        // Toolbar
-                        HStack(spacing: 8) {
-                            Button {
-                                withAnimation(.easeInOut(duration: 0.2)) {
-                                    showSidebar.toggle()
-                                }
-                            } label: {
-                                Image(systemName: "sidebar.left")
-                                    .font(.system(size: 12))
-                            }
-                            .buttonStyle(.plain)
-                            .help(showSidebar ? "Hide sidebar" : "Show sidebar")
-
-                            Image(systemName: "rectangle.connected.to.line.below")
-                                .foregroundStyle(.blue)
-                                .font(.system(size: 11))
-
-                            Text(schema.databaseName)
-                                .font(.system(size: 12, weight: .semibold))
-
-                            Spacer()
-
-                            if schema.isAddingTable {
-                                ProgressView()
-                                    .scaleEffect(0.5)
-                                    .frame(width: 14, height: 14)
-                            }
-
-                            Text("\(schema.tables.count) tables")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(.secondary)
-
-                            if !schema.relationships.isEmpty {
-                                Text("\(schema.relationships.count) FKs")
-                                    .font(.system(size: 10, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Button {
-                                resetLayout(schema)
-                            } label: {
-                                Image(systemName: "arrow.counterclockwise")
-                                    .font(.system(size: 11))
-                            }
-                            .buttonStyle(.plain)
-                            .help("Reset layout")
-                            .disabled(schema.tables.isEmpty)
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(.bar)
-
-                        Divider()
-
-                        // Canvas area
-                        if schema.tables.isEmpty {
-                            VStack(spacing: 12) {
-                                Spacer()
-                                Image(systemName: "rectangle.connected.to.line.below")
-                                    .font(.system(size: 40))
-                                    .foregroundStyle(.quaternary)
-                                Text("Add tables from the sidebar")
-                                    .font(.system(size: 13))
-                                    .foregroundStyle(.secondary)
-                                Text("Double-click or use the + button to add tables to the diagram")
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.tertiary)
-                                Spacer()
-                            }
-                            .frame(maxWidth: .infinity)
-                        } else {
-                            ERDCanvasRepresentable(schema: schema)
-                        }
-                    }
+                    // Canvas — separate view to observe schema changes
+                    ERDCanvasAreaView(
+                        schema: schema,
+                        showSidebar: $showSidebar
+                    )
                 }
             } else {
                 VStack(spacing: 8) {
@@ -113,8 +42,93 @@ struct ERDWindowView: View {
             }
         }
     }
+}
 
-    private func resetLayout(_ schema: ERDSchema) {
+// MARK: - Canvas Area (observes schema for live updates)
+
+struct ERDCanvasAreaView: View {
+    @ObservedObject var schema: ERDSchema
+    @Binding var showSidebar: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Toolbar
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showSidebar.toggle()
+                    }
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+                .help(showSidebar ? "Hide sidebar" : "Show sidebar")
+
+                Image(systemName: "rectangle.connected.to.line.below")
+                    .foregroundStyle(.blue)
+                    .font(.system(size: 11))
+
+                Text(schema.databaseName)
+                    .font(.system(size: 12, weight: .semibold))
+
+                Spacer()
+
+                if schema.isAddingTable {
+                    ProgressView()
+                        .scaleEffect(0.5)
+                        .frame(width: 14, height: 14)
+                }
+
+                Text("\(schema.tables.count) tables")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(.secondary)
+
+                if !schema.relationships.isEmpty {
+                    Text("\(schema.relationships.count) FKs")
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+
+                Button {
+                    resetLayout()
+                } label: {
+                    Image(systemName: "arrow.counterclockwise")
+                        .font(.system(size: 11))
+                }
+                .buttonStyle(.plain)
+                .help("Reset layout")
+                .disabled(schema.tables.isEmpty)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(.bar)
+
+            Divider()
+
+            // Canvas area
+            if schema.tables.isEmpty {
+                VStack(spacing: 12) {
+                    Spacer()
+                    Image(systemName: "rectangle.connected.to.line.below")
+                        .font(.system(size: 40))
+                        .foregroundStyle(.quaternary)
+                    Text("Add tables from the sidebar")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                    Text("Double-click or use the + button to add tables to the diagram")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                ERDCanvasRepresentable(schema: schema)
+            }
+        }
+    }
+
+    private func resetLayout() {
         let cols = max(Int(ceil(sqrt(Double(schema.tables.count)))), 1)
         for (i, table) in schema.tables.enumerated() {
             table.position = CGPoint(
