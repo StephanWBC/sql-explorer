@@ -93,11 +93,25 @@ struct ERDCanvasAreaView: View {
                 Button {
                     autoArrangeLayout()
                 } label: {
-                    Image(systemName: "wand.and.stars")
-                        .font(.system(size: 11))
+                    HStack(spacing: 4) {
+                        Image(systemName: "wand.and.stars")
+                            .font(.system(size: 10))
+                        Text("Auto Arrange")
+                            .font(.system(size: 10, weight: .medium))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(Color.accentColor.opacity(0.15))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 5)
+                            .strokeBorder(Color.accentColor.opacity(0.3), lineWidth: 0.5)
+                    )
                 }
                 .buttonStyle(.plain)
-                .help("Auto arrange")
+                .help("Auto arrange tables based on relationships")
                 .disabled(schema.tables.isEmpty)
             }
             .padding(.horizontal, 10)
@@ -128,113 +142,149 @@ struct ERDCanvasAreaView: View {
         }
     }
 
-    /// Force-directed auto-arrange: connected tables cluster together, others spread apart
+    // MARK: - Hierarchical auto-arrange layout
+
     private func autoArrangeLayout() {
         let tables = schema.tables
         guard !tables.isEmpty else { return }
 
+        let tableW = ERDCanvasNSView.tableWidth     // 220
+        let headerH = ERDCanvasNSView.headerHeight   // 28
+        let rowH = ERDCanvasNSView.rowHeight          // 20
+        let hGap: CGFloat = 80
+        let vGap: CGFloat = 60
+        let margin: CGFloat = 40
+
         if tables.count == 1 {
-            tables[0].position = CGPoint(x: 40, y: 40)
+            tables[0].position = CGPoint(x: margin, y: margin)
             schema.objectWillChange.send()
             return
         }
 
-        let tableW = ERDCanvasNSView.tableWidth
-        let rowH = ERDCanvasNSView.rowHeight
-        let headerH = ERDCanvasNSView.headerHeight
+        func tableHeight(_ t: ERDTable) -> CGFloat {
+            headerH + CGFloat(t.columns.count) * rowH + 4
+        }
 
-        // Build adjacency lookup (bidirectional)
-        var adj: [String: Set<String>] = [:]
+        let allNames = Set(tables.map(\.fullName))
+
+        // Build directed graph from FK relationships
+        // fromTable (has FK column) references toTable (lookup/parent table)
+        // Hierarchy: toTable is ABOVE, fromTable is BELOW
+        var referencedBy: [String: Set<String>] = [:]  // table → tables that have FKs to it (children)
+        var referencesTo: [String: Set<String>] = [:]   // table → tables it points FK to (parents)
+
+        for name in allNames {
+            referencedBy[name] = []
+            referencesTo[name] = []
+        }
+
+        var seenEdges = Set<String>()
         for rel in schema.relationships {
-            adj[rel.fromTable, default: []].insert(rel.toTable)
-            adj[rel.toTable, default: []].insert(rel.fromTable)
+            guard rel.fromTable != rel.toTable else { continue }
+            let key = "\(rel.fromTable)→\(rel.toTable)"
+            guard !seenEdges.contains(key) else { continue }
+            seenEdges.insert(key)
+            referencedBy[rel.toTable]?.insert(rel.fromTable)
+            referencesTo[rel.fromTable]?.insert(rel.toTable)
         }
 
-        // Seed positions: spread tables in a circle so the simulation starts untangled
-        let cx: CGFloat = CGFloat(tables.count) * 140
-        let cy: CGFloat = CGFloat(tables.count) * 120
-        let radius: CGFloat = CGFloat(tables.count) * 100
-        for (i, table) in tables.enumerated() {
-            let angle = (2.0 * .pi / CGFloat(tables.count)) * CGFloat(i)
-            table.position = CGPoint(
-                x: cx + cos(angle) * radius,
-                y: cy + sin(angle) * radius
-            )
+        // --- Layer assignment (longest-path from roots) ---
+        // Roots = tables with no outgoing FK references (pure lookup tables)
+        var roots = allNames.filter { (referencesTo[$0] ?? []).isEmpty }
+        if roots.isEmpty {
+            // All tables reference something (cycle): pick the most-referenced table as root
+            roots = [allNames.max(by: {
+                (referencedBy[$0] ?? []).count < (referencedBy[$1] ?? []).count
+            }) ?? tables[0].fullName]
         }
 
-        // Force-directed simulation parameters
-        let iterations = 150
-        let repulsion: CGFloat = 80000
-        let attraction: CGFloat = 0.005
-        let idealEdge: CGFloat = 350
-        var damping: CGFloat = 0.85
-        let maxSpeed: CGFloat = 40
+        var layerOf: [String: Int] = [:]
+        for root in roots { layerOf[root] = 0 }
 
-        var velocities: [UUID: CGPoint] = [:]
-        for table in tables { velocities[table.id] = .zero }
-
-        for _ in 0..<iterations {
-            var forces: [UUID: CGPoint] = [:]
-            for table in tables { forces[table.id] = .zero }
-
-            // Repulsion between every pair (considers actual table size for overlap avoidance)
-            for i in 0..<tables.count {
-                for j in (i + 1)..<tables.count {
-                    let a = tables[i], b = tables[j]
-                    let ah = headerH + CGFloat(a.columns.count) * rowH + 4
-                    let bh = headerH + CGFloat(b.columns.count) * rowH + 4
-                    let dx = a.position.x - b.position.x
-                    let dy = a.position.y - b.position.y
-                    let dist = max(sqrt(dx * dx + dy * dy), 1)
-                    // Stronger repulsion when tables would overlap
-                    let minSep = max(tableW + 40, (ah + bh) / 2 + 40)
-                    let boost: CGFloat = dist < minSep ? 3.0 : 1.0
-                    let force = repulsion * boost / (dist * dist)
-                    let fx = (dx / dist) * force
-                    let fy = (dy / dist) * force
-                    forces[a.id]!.x += fx;  forces[a.id]!.y += fy
-                    forces[b.id]!.x -= fx;  forces[b.id]!.y -= fy
+        // BFS with longest-path update
+        var queue = roots.map { ($0, 0) }
+        var qi = 0
+        while qi < queue.count {
+            let (current, currentLayer) = queue[qi]
+            qi += 1
+            for child in referencedBy[current] ?? [] {
+                let newLayer = currentLayer + 1
+                if let existing = layerOf[child] {
+                    if newLayer > existing { layerOf[child] = newLayer }
+                } else {
+                    layerOf[child] = newLayer
+                    queue.append((child, newLayer))
                 }
             }
-
-            // Attraction along FK edges
-            for rel in schema.relationships {
-                guard let a = tables.first(where: { $0.fullName == rel.fromTable }),
-                      let b = tables.first(where: { $0.fullName == rel.toTable }) else { continue }
-                let dx = b.position.x - a.position.x
-                let dy = b.position.y - a.position.y
-                let dist = max(sqrt(dx * dx + dy * dy), 1)
-                let force = attraction * (dist - idealEdge)
-                let fx = (dx / dist) * force
-                let fy = (dy / dist) * force
-                forces[a.id]!.x += fx;  forces[a.id]!.y += fy
-                forces[b.id]!.x -= fx;  forces[b.id]!.y -= fy
-            }
-
-            // Apply forces with velocity damping
-            for table in tables {
-                var v = velocities[table.id]!
-                v.x = (v.x + forces[table.id]!.x) * damping
-                v.y = (v.y + forces[table.id]!.y) * damping
-                let speed = sqrt(v.x * v.x + v.y * v.y)
-                if speed > maxSpeed {
-                    v.x = v.x / speed * maxSpeed
-                    v.y = v.y / speed * maxSpeed
-                }
-                velocities[table.id] = v
-                table.position.x += v.x
-                table.position.y += v.y
-            }
-
-            damping *= 0.99 // Gradual cooldown
         }
 
-        // Normalize: shift so top-left table starts at a comfortable margin
-        let minX = tables.map(\.position.x).min() ?? 0
-        let minY = tables.map(\.position.y).min() ?? 0
+        // Assign unvisited tables (disconnected) to layer 0
+        for name in allNames where layerOf[name] == nil {
+            layerOf[name] = 0
+        }
+
+        // --- Group tables by layer ---
+        var layerGroups: [Int: [ERDTable]] = [:]
         for table in tables {
-            table.position.x = table.position.x - minX + 40
-            table.position.y = table.position.y - minY + 40
+            let l = layerOf[table.fullName] ?? 0
+            layerGroups[l, default: []].append(table)
+        }
+        let sortedLayers = layerGroups.keys.sorted()
+
+        // --- Order within layers (barycenter crossing minimization) ---
+        // First layer: sort by degree (most-connected centered) then alphabetical
+        layerGroups[sortedLayers[0]]?.sort(by: { a, b in
+            let aDeg = (referencedBy[a.fullName] ?? []).count
+            let bDeg = (referencedBy[b.fullName] ?? []).count
+            if aDeg != bDeg { return aDeg > bDeg }
+            return a.fullName < b.fullName
+        })
+
+        // Build positional index for first layer
+        var posIndex: [String: CGFloat] = [:]
+        for (i, t) in (layerGroups[sortedLayers[0]] ?? []).enumerated() {
+            posIndex[t.fullName] = CGFloat(i)
+        }
+
+        // Subsequent layers: sort by barycenter of parents in previous layer
+        for li in 1..<sortedLayers.count {
+            layerGroups[sortedLayers[li]]?.sort(by: { a, b in
+                let aParents = (referencesTo[a.fullName] ?? []).compactMap { posIndex[$0] }
+                let bParents = (referencesTo[b.fullName] ?? []).compactMap { posIndex[$0] }
+                let aCenter = aParents.isEmpty ? CGFloat.greatestFiniteMagnitude
+                    : aParents.reduce(0, +) / CGFloat(aParents.count)
+                let bCenter = bParents.isEmpty ? CGFloat.greatestFiniteMagnitude
+                    : bParents.reduce(0, +) / CGFloat(bParents.count)
+                if aCenter != bCenter { return aCenter < bCenter }
+                return a.fullName < b.fullName
+            })
+
+            // Update positional index for this layer
+            for (i, t) in (layerGroups[sortedLayers[li]] ?? []).enumerated() {
+                posIndex[t.fullName] = CGFloat(i)
+            }
+        }
+
+        // --- Assign grid-aligned positions ---
+        let maxCount = layerGroups.values.map(\.count).max() ?? 1
+        let totalWidth = CGFloat(maxCount) * (tableW + hGap) - hGap
+
+        var yPos = margin
+        for layerKey in sortedLayers {
+            let layerTables = layerGroups[layerKey] ?? []
+            let layerWidth = CGFloat(layerTables.count) * (tableW + hGap) - hGap
+            let xStart = margin + (totalWidth - layerWidth) / 2   // Center layer horizontally
+
+            var maxH: CGFloat = 0
+            for (i, table) in layerTables.enumerated() {
+                table.position = CGPoint(
+                    x: xStart + CGFloat(i) * (tableW + hGap),
+                    y: yPos
+                )
+                maxH = max(maxH, tableHeight(table))
+            }
+
+            yPos += maxH + vGap
         }
 
         schema.objectWillChange.send()
