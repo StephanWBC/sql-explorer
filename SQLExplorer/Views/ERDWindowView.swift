@@ -91,13 +91,13 @@ struct ERDCanvasAreaView: View {
                 }
 
                 Button {
-                    resetLayout()
+                    autoArrangeLayout()
                 } label: {
-                    Image(systemName: "arrow.counterclockwise")
+                    Image(systemName: "wand.and.stars")
                         .font(.system(size: 11))
                 }
                 .buttonStyle(.plain)
-                .help("Reset layout")
+                .help("Auto arrange")
                 .disabled(schema.tables.isEmpty)
             }
             .padding(.horizontal, 10)
@@ -128,14 +128,115 @@ struct ERDCanvasAreaView: View {
         }
     }
 
-    private func resetLayout() {
-        let cols = max(Int(ceil(sqrt(Double(schema.tables.count)))), 1)
-        for (i, table) in schema.tables.enumerated() {
+    /// Force-directed auto-arrange: connected tables cluster together, others spread apart
+    private func autoArrangeLayout() {
+        let tables = schema.tables
+        guard !tables.isEmpty else { return }
+
+        if tables.count == 1 {
+            tables[0].position = CGPoint(x: 40, y: 40)
+            schema.objectWillChange.send()
+            return
+        }
+
+        let tableW = ERDCanvasNSView.tableWidth
+        let rowH = ERDCanvasNSView.rowHeight
+        let headerH = ERDCanvasNSView.headerHeight
+
+        // Build adjacency lookup (bidirectional)
+        var adj: [String: Set<String>] = [:]
+        for rel in schema.relationships {
+            adj[rel.fromTable, default: []].insert(rel.toTable)
+            adj[rel.toTable, default: []].insert(rel.fromTable)
+        }
+
+        // Seed positions: spread tables in a circle so the simulation starts untangled
+        let cx: CGFloat = CGFloat(tables.count) * 140
+        let cy: CGFloat = CGFloat(tables.count) * 120
+        let radius: CGFloat = CGFloat(tables.count) * 100
+        for (i, table) in tables.enumerated() {
+            let angle = (2.0 * .pi / CGFloat(tables.count)) * CGFloat(i)
             table.position = CGPoint(
-                x: CGFloat(i % cols) * 280 + 40,
-                y: CGFloat(i / cols) * 240 + 40
+                x: cx + cos(angle) * radius,
+                y: cy + sin(angle) * radius
             )
         }
+
+        // Force-directed simulation parameters
+        let iterations = 150
+        let repulsion: CGFloat = 80000
+        let attraction: CGFloat = 0.005
+        let idealEdge: CGFloat = 350
+        var damping: CGFloat = 0.85
+        let maxSpeed: CGFloat = 40
+
+        var velocities: [UUID: CGPoint] = [:]
+        for table in tables { velocities[table.id] = .zero }
+
+        for _ in 0..<iterations {
+            var forces: [UUID: CGPoint] = [:]
+            for table in tables { forces[table.id] = .zero }
+
+            // Repulsion between every pair (considers actual table size for overlap avoidance)
+            for i in 0..<tables.count {
+                for j in (i + 1)..<tables.count {
+                    let a = tables[i], b = tables[j]
+                    let ah = headerH + CGFloat(a.columns.count) * rowH + 4
+                    let bh = headerH + CGFloat(b.columns.count) * rowH + 4
+                    let dx = a.position.x - b.position.x
+                    let dy = a.position.y - b.position.y
+                    let dist = max(sqrt(dx * dx + dy * dy), 1)
+                    // Stronger repulsion when tables would overlap
+                    let minSep = max(tableW + 40, (ah + bh) / 2 + 40)
+                    let boost: CGFloat = dist < minSep ? 3.0 : 1.0
+                    let force = repulsion * boost / (dist * dist)
+                    let fx = (dx / dist) * force
+                    let fy = (dy / dist) * force
+                    forces[a.id]!.x += fx;  forces[a.id]!.y += fy
+                    forces[b.id]!.x -= fx;  forces[b.id]!.y -= fy
+                }
+            }
+
+            // Attraction along FK edges
+            for rel in schema.relationships {
+                guard let a = tables.first(where: { $0.fullName == rel.fromTable }),
+                      let b = tables.first(where: { $0.fullName == rel.toTable }) else { continue }
+                let dx = b.position.x - a.position.x
+                let dy = b.position.y - a.position.y
+                let dist = max(sqrt(dx * dx + dy * dy), 1)
+                let force = attraction * (dist - idealEdge)
+                let fx = (dx / dist) * force
+                let fy = (dy / dist) * force
+                forces[a.id]!.x += fx;  forces[a.id]!.y += fy
+                forces[b.id]!.x -= fx;  forces[b.id]!.y -= fy
+            }
+
+            // Apply forces with velocity damping
+            for table in tables {
+                var v = velocities[table.id]!
+                v.x = (v.x + forces[table.id]!.x) * damping
+                v.y = (v.y + forces[table.id]!.y) * damping
+                let speed = sqrt(v.x * v.x + v.y * v.y)
+                if speed > maxSpeed {
+                    v.x = v.x / speed * maxSpeed
+                    v.y = v.y / speed * maxSpeed
+                }
+                velocities[table.id] = v
+                table.position.x += v.x
+                table.position.y += v.y
+            }
+
+            damping *= 0.99 // Gradual cooldown
+        }
+
+        // Normalize: shift so top-left table starts at a comfortable margin
+        let minX = tables.map(\.position.x).min() ?? 0
+        let minY = tables.map(\.position.y).min() ?? 0
+        for table in tables {
+            table.position.x = table.position.x - minX + 40
+            table.position.y = table.position.y - minY + 40
+        }
+
         schema.objectWillChange.send()
     }
 }
