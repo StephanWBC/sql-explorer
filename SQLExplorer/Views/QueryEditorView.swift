@@ -431,28 +431,30 @@ struct SQLTextEditor: NSViewRepresentable {
             // Debounce syntax highlighting (fires on main run loop — no async dispatch needed)
             highlightTimer?.invalidate()
             highlightTimer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: false) { [weak textView] _ in
-                guard let tv = textView, tv.window != nil else { return }
-                SQLHighlighter.highlight(tv)
+                MainActor.assumeIsolated {
+                    guard let tv = textView, tv.window != nil else { return }
+                    SQLHighlighter.highlight(tv)
+                }
             }
 
             // Debounce completion — only trigger after 400ms pause, and only if 3+ chars typed
             completionTimer?.invalidate()
             completionTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: false) { [weak textView] _ in
-                guard let tv = textView, tv.window != nil else { return }
-                let range = tv.selectedRange()
-                guard range.length == 0, range.location > 0 else { return }
-                let str = tv.string as NSString
-                let strLen = str.length
-                guard range.location <= strLen else { return }
-                var start = range.location
-                while start > 0 {
-                    let ch = str.character(at: start - 1)
-                    let c = Character(UnicodeScalar(ch)!)
-                    if c.isLetter || c.isNumber || c == "_" || c == "." { start -= 1 }
-                    else { break }
-                }
-                if range.location - start >= 3 {
-                    MainActor.assumeIsolated {
+                MainActor.assumeIsolated {
+                    guard let tv = textView, tv.window != nil else { return }
+                    let range = tv.selectedRange()
+                    guard range.length == 0, range.location > 0 else { return }
+                    let str = tv.string as NSString
+                    let strLen = str.length
+                    guard range.location <= strLen else { return }
+                    var start = range.location
+                    while start > 0 {
+                        let ch = str.character(at: start - 1)
+                        let c = Character(UnicodeScalar(ch)!)
+                        if c.isLetter || c.isNumber || c == "_" || c == "." { start -= 1 }
+                        else { break }
+                    }
+                    if range.location - start >= 3 {
                         tv.complete(nil)
                     }
                 }
