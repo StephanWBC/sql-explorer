@@ -462,11 +462,20 @@ class AppState: ObservableObject {
                                  columns: columns, position: CGPoint(x: x, y: y))
             schema.tables.append(table)
 
-            // Refresh FK relationships between all tables on canvas
+            // Load or reuse cached FKs
+            if schema.cachedForeignKeys == nil {
+                schema.cachedForeignKeys = try await ERDService.loadAllForeignKeys(
+                    connectionManager: connectionManager, connectionId: connId)
+            }
+
+            let allFKs = schema.cachedForeignKeys!
             let names = schema.tablesOnCanvas
-            let rels = try await ERDService.loadRelationships(
-                connectionManager: connectionManager, connectionId: connId, tableNames: names)
-            schema.relationships = rels
+
+            // Derive on-canvas relationships from cache
+            schema.relationships = ERDService.filterRelationships(from: allFKs, tablesOnCanvas: names)
+
+            // Derive related tables not on canvas
+            schema.relatedTables = ERDService.filterRelatedTables(from: allFKs, tablesOnCanvas: names)
         } catch {
             statusMessage = "Failed to add table to diagram: \(error.localizedDescription)"
         }
@@ -476,16 +485,19 @@ class AppState: ObservableObject {
 
     /// Remove a table from the ERD canvas
     func removeTableFromERD(_ table: ERDTable) async {
-        guard let schema = erdSchema, let connId = schema.connectionId else { return }
+        guard let schema = erdSchema else { return }
         schema.tables.removeAll { $0.id == table.id }
 
-        // Refresh relationships
         let names = schema.tablesOnCanvas
-        if let rels = try? await ERDService.loadRelationships(
-            connectionManager: connectionManager, connectionId: connId, tableNames: names) {
-            schema.relationships = rels
+
+        if let allFKs = schema.cachedForeignKeys {
+            // Recompute from cache (no network call needed)
+            schema.relationships = ERDService.filterRelationships(from: allFKs, tablesOnCanvas: names)
+            schema.relatedTables = ERDService.filterRelatedTables(from: allFKs, tablesOnCanvas: names)
         } else {
+            // Fallback: remove stale relationships directly
             schema.relationships.removeAll { $0.fromTable == table.fullName || $0.toTable == table.fullName }
+            schema.relatedTables.removeAll()
         }
     }
 

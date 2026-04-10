@@ -155,6 +155,28 @@ struct ERDSidebarView: View {
         return available.filter { $0.fullName.lowercased().contains(q) }
     }
 
+    /// Related tables grouped by which canvas table they connect to, filtered by search
+    private var groupedRelatedTables: [(canvasTable: String, related: [ERDRelatedTable])] {
+        let onCanvas = schema.tablesOnCanvas
+        let filtered = schema.relatedTables.filter { rel in
+            // Exclude tables already on canvas
+            guard !onCanvas.contains(rel.fullName) else { return false }
+            // Apply search filter
+            if !searchText.isEmpty {
+                let q = searchText.lowercased()
+                return rel.fullName.lowercased().contains(q)
+            }
+            return true
+        }
+        let grouped = Dictionary(grouping: filtered, by: \.relatedToTable)
+        return grouped.sorted(by: { $0.key < $1.key })
+            .map { (canvasTable: $0.key, related: $0.value.sorted(by: { $0.fullName < $1.fullName })) }
+    }
+
+    private var totalRelatedCount: Int {
+        groupedRelatedTables.reduce(0) { $0 + $1.related.count }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             // Search
@@ -205,6 +227,17 @@ struct ERDSidebarView: View {
                             }
                         }
 
+                        // Related tables (FK-connected but not on canvas)
+                        if totalRelatedCount > 0 {
+                            sectionHeader("RELATED (\(totalRelatedCount))", color: .orange)
+                            ForEach(groupedRelatedTables, id: \.canvasTable) { group in
+                                relatedGroupHeader(group.canvasTable)
+                                ForEach(group.related) { rel in
+                                    relatedTableRow(rel)
+                                }
+                            }
+                        }
+
                         // Available tables
                         sectionHeader("AVAILABLE (\(filteredTables.count))", color: .secondary)
                         ForEach(filteredTables) { entry in
@@ -226,6 +259,58 @@ struct ERDSidebarView: View {
             .padding(.horizontal, 12)
             .padding(.top, 10)
             .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private func relatedGroupHeader(_ canvasTable: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "link")
+                .foregroundStyle(.orange.opacity(0.6))
+                .font(.system(size: 8))
+            Text("via \(canvasTable)")
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.orange.opacity(0.7))
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+        .padding(.bottom, 2)
+    }
+
+    @ViewBuilder
+    private func relatedTableRow(_ rel: ERDRelatedTable) -> some View {
+        let onCanvas = schema.tablesOnCanvas.contains(rel.fullName)
+        HStack(spacing: 4) {
+            Image(systemName: rel.direction == .outgoing ? "arrow.right" : "arrow.left")
+                .foregroundStyle(.orange.opacity(0.8))
+                .font(.system(size: 8, weight: .semibold))
+            Image(systemName: "tablecells")
+                .foregroundStyle(.orange.opacity(0.7))
+                .font(.system(size: 9))
+            Text(rel.fullName)
+                .font(.system(size: 11))
+                .lineLimit(1)
+            Spacer()
+            if !onCanvas {
+                Button {
+                    onAddTable(ERDTableEntry(schema: rel.schema, name: rel.name))
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.system(size: 12))
+                }
+                .buttonStyle(.plain)
+            } else {
+                Image(systemName: "checkmark")
+                    .foregroundStyle(.green)
+                    .font(.system(size: 9))
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 3)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            if !onCanvas { onAddTable(ERDTableEntry(schema: rel.schema, name: rel.name)) }
+        }
     }
 
     @ViewBuilder

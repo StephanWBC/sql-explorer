@@ -177,6 +177,27 @@ class ERDCanvasNSView: NSView {
         ])
         headerStr.draw(at: CGPoint(x: rect.minX + 8, y: rect.minY + 7))
 
+        // Related-table badge (orange circle with count)
+        if let count = schema.relatedCountByTable[table.fullName], count > 0 {
+            let badgeSize: CGFloat = 16
+            let badgeX = rect.maxX - badgeSize / 2 - 2
+            let badgeY = rect.minY - badgeSize / 2 + 2
+            let badgeRect = CGRect(x: badgeX, y: badgeY, width: badgeSize, height: badgeSize)
+
+            ctx.setFillColor(NSColor.systemOrange.cgColor)
+            ctx.fillEllipse(in: badgeRect)
+
+            let countStr = NSAttributedString(string: "\(count)", attributes: [
+                .font: NSFont.systemFont(ofSize: 9, weight: .bold),
+                .foregroundColor: NSColor.white
+            ])
+            let countSize = countStr.size()
+            countStr.draw(at: CGPoint(
+                x: badgeX + (badgeSize - countSize.width) / 2,
+                y: badgeY + (badgeSize - countSize.height) / 2
+            ))
+        }
+
         // Columns
         for (i, col) in table.columns.enumerated() {
             let y = rect.minY + Self.headerHeight + CGFloat(i) * Self.rowHeight + 2
