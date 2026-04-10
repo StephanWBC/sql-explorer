@@ -37,6 +37,13 @@ if [ -d "$MSAL_FW" ]; then
     # Use -RL to dereference symlinks — prevents Error -36 in Finder copy
     cp -RL "$MSAL_FW" "$APP_DIR/Contents/Frameworks/"
 
+    # Remove duplicated Versions directory (cp -RL expands symlinks into full copies)
+    # The top-level Headers/MSAL/Modules/Resources are already the real files
+    rm -rf "$APP_DIR/Contents/Frameworks/MSAL.framework/Versions"
+
+    # Strip all extended attributes from the framework
+    xattr -rc "$APP_DIR/Contents/Frameworks/MSAL.framework" 2>/dev/null || true
+
     # Fix rpath
     install_name_tool -add_rpath @executable_path/../Frameworks "$APP_DIR/Contents/MacOS/SQLExplorer" 2>/dev/null || true
 
@@ -171,6 +178,9 @@ rm -rf "$STAGING"
 
 hdiutil convert "$RW_DMG" -format UDZO -o "$DMG_PATH" -ov
 rm -f "$RW_DMG"
+
+# Strip quarantine attribute from final DMG to prevent Error -36 on drag-install
+xattr -d com.apple.quarantine "$DMG_PATH" 2>/dev/null || true
 
 echo ""
 echo "=== Build complete ==="
