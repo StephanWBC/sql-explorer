@@ -223,49 +223,89 @@ struct ERDCanvasAreaView: View {
             layerOf[name] = 0
         }
 
+        // --- Layer compaction: pull tables down closer to their children ---
+        // This prevents long edges (e.g. Flag at layer 0 when its only child LeadFlag is at layer 2)
+        // Process from top layers down; move each table to just above its closest child
+        let maxLayer = layerOf.values.max() ?? 0
+        for targetLayer in 0..<maxLayer {
+            for name in allNames where layerOf[name] == targetLayer {
+                let children = referencedBy[name] ?? []
+                guard !children.isEmpty else { continue }
+                let minChildLayer = children.compactMap { layerOf[$0] }.min() ?? (targetLayer + 1)
+                let parents = referencesTo[name] ?? []
+                let maxParentLayer = parents.compactMap { layerOf[$0] }.max() ?? -1
+                // Pull down: sit just above closest child, but stay below all parents
+                let ideal = minChildLayer - 1
+                let constrained = max(ideal, maxParentLayer + 1)
+                if constrained > targetLayer {
+                    layerOf[name] = constrained
+                }
+            }
+        }
+
+        // --- Renumber layers to remove gaps ---
+        let usedLayers = Set(layerOf.values).sorted()
+        let layerRemap = Dictionary(uniqueKeysWithValues: usedLayers.enumerated().map { ($1, $0) })
+        for name in allNames {
+            layerOf[name] = layerRemap[layerOf[name] ?? 0] ?? 0
+        }
+
         // --- Group tables by layer ---
         var layerGroups: [Int: [ERDTable]] = [:]
         for table in tables {
             let l = layerOf[table.fullName] ?? 0
             layerGroups[l, default: []].append(table)
         }
-        let sortedLayers = layerGroups.keys.sorted()
+        var sortedLayers = layerGroups.keys.sorted()
 
-        // --- Order within layers (barycenter crossing minimization) ---
-        // First layer: sort by degree (most-connected centered) then alphabetical
+        // --- Order within layers (multi-pass barycenter crossing minimization) ---
+        // Seed: sort first layer by degree (most-connected first) then alphabetical
         layerGroups[sortedLayers[0]]?.sort(by: { a, b in
-            let aDeg = (referencedBy[a.fullName] ?? []).count
-            let bDeg = (referencedBy[b.fullName] ?? []).count
+            let aDeg = (referencedBy[a.fullName] ?? []).count + (referencesTo[a.fullName] ?? []).count
+            let bDeg = (referencedBy[b.fullName] ?? []).count + (referencesTo[b.fullName] ?? []).count
             if aDeg != bDeg { return aDeg > bDeg }
             return a.fullName < b.fullName
         })
 
-        // Build positional index for first layer
+        // Build positional index
         var posIndex: [String: CGFloat] = [:]
-        for (i, t) in (layerGroups[sortedLayers[0]] ?? []).enumerated() {
-            posIndex[t.fullName] = CGFloat(i)
-        }
-
-        // Subsequent layers: sort by barycenter of parents in previous layer
-        for li in 1..<sortedLayers.count {
-            layerGroups[sortedLayers[li]]?.sort(by: { a, b in
-                let aParents = (referencesTo[a.fullName] ?? []).compactMap { posIndex[$0] }
-                let bParents = (referencesTo[b.fullName] ?? []).compactMap { posIndex[$0] }
-                let aCenter = aParents.isEmpty ? CGFloat.greatestFiniteMagnitude
-                    : aParents.reduce(0, +) / CGFloat(aParents.count)
-                let bCenter = bParents.isEmpty ? CGFloat.greatestFiniteMagnitude
-                    : bParents.reduce(0, +) / CGFloat(bParents.count)
-                if aCenter != bCenter { return aCenter < bCenter }
-                return a.fullName < b.fullName
-            })
-
-            // Update positional index for this layer
-            for (i, t) in (layerGroups[sortedLayers[li]] ?? []).enumerated() {
-                posIndex[t.fullName] = CGFloat(i)
+        func rebuildIndex() {
+            for layerKey in sortedLayers {
+                for (i, t) in (layerGroups[layerKey] ?? []).enumerated() {
+                    posIndex[t.fullName] = CGFloat(i)
+                }
             }
+        }
+        rebuildIndex()
+
+        // Run 4 passes (alternate down/up sweeps) for better convergence
+        for pass in 0..<4 {
+            let layerOrder = pass % 2 == 0
+                ? Array(sortedLayers.dropFirst())          // top-down
+                : Array(sortedLayers.dropLast().reversed()) // bottom-up
+
+            for layerKey in layerOrder {
+                layerGroups[layerKey]?.sort(by: { a, b in
+                    // Barycenter: average position of ALL connected tables (parents + children)
+                    let aConns = ((referencesTo[a.fullName] ?? []) as Set)
+                        .union(referencedBy[a.fullName] ?? [])
+                        .compactMap { posIndex[$0] }
+                    let bConns = ((referencesTo[b.fullName] ?? []) as Set)
+                        .union(referencedBy[b.fullName] ?? [])
+                        .compactMap { posIndex[$0] }
+                    let aCenter = aConns.isEmpty ? CGFloat(999)
+                        : aConns.reduce(0, +) / CGFloat(aConns.count)
+                    let bCenter = bConns.isEmpty ? CGFloat(999)
+                        : bConns.reduce(0, +) / CGFloat(bConns.count)
+                    if aCenter != bCenter { return aCenter < bCenter }
+                    return a.fullName < b.fullName
+                })
+            }
+            rebuildIndex()
         }
 
         // --- Assign grid-aligned positions ---
+        sortedLayers = layerGroups.keys.sorted()
         let maxCount = layerGroups.values.map(\.count).max() ?? 1
         let totalWidth = CGFloat(maxCount) * (tableW + hGap) - hGap
 
