@@ -528,6 +528,7 @@ class AppState: ObservableObject {
         schema.savedDiagramId = diagram.id
         schema.savedDiagramName = name
         statusMessage = "Diagram \"\(name)\" saved"
+        objectWillChange.send()
     }
 
     func loadDiagram(_ diagram: SavedDiagram) async {
@@ -579,6 +580,7 @@ class AppState: ObservableObject {
             erdSchema?.savedDiagramId = nil
             erdSchema?.savedDiagramName = ""
         }
+        objectWillChange.send()
     }
 
     // MARK: - Legacy (manual connections)
