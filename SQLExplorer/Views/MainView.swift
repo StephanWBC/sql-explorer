@@ -20,6 +20,8 @@ struct MainView: View {
     @State private var explorerWidth: CGFloat = 280
     @State private var selectedSidebarTab: SidebarTab = .explorer
     @State private var expandedNodes: Set<UUID> = []
+    @State private var selectedSchemas: Set<String> = []
+    @State private var explorerSearchText: String = ""
 
     var body: some View {
         HSplitView {
@@ -41,6 +43,76 @@ struct MainView: View {
                 .padding(.vertical, 6)
 
                 Divider()
+
+                // Schema filter (only on Explorer tab when schemas exist)
+                if selectedSidebarTab == .explorer && availableSchemas.count > 1 {
+                    VStack(spacing: 0) {
+                        // Search bar
+                        HStack(spacing: 4) {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundStyle(.secondary)
+                                .font(.system(size: 10))
+                            TextField("Filter...", text: $explorerSearchText)
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 11))
+                            if !explorerSearchText.isEmpty {
+                                Button { explorerSearchText = "" } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Color(nsColor: .controlBackgroundColor).opacity(0.4))
+                        .cornerRadius(5)
+                        .padding(.horizontal, 8)
+                        .padding(.top, 4)
+                        .padding(.bottom, 4)
+
+                        // Schema chips
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 4) {
+                                ForEach(availableSchemas, id: \.self) { s in
+                                    let isSelected = selectedSchemas.contains(s)
+                                    Button {
+                                        if isSelected { selectedSchemas.remove(s) }
+                                        else { selectedSchemas.insert(s) }
+                                    } label: {
+                                        Text(s)
+                                            .font(.system(size: 9, weight: isSelected ? .semibold : .regular))
+                                            .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 3)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 4)
+                                                    .fill(isSelected ? Color.accentColor : Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                                            )
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 4)
+                                                    .strokeBorder(isSelected ? Color.clear : Color.secondary.opacity(0.3), lineWidth: 0.5)
+                                            )
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                if !selectedSchemas.isEmpty {
+                                    Button { selectedSchemas.removeAll() } label: {
+                                        Text("Clear")
+                                            .font(.system(size: 9))
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .padding(.horizontal, 8)
+                        }
+                        .padding(.bottom, 4)
+
+                        Divider()
+                    }
+                }
 
                 // Tab content
                 switch selectedSidebarTab {
@@ -266,6 +338,45 @@ struct MainView: View {
         }
     }
 
+    /// All distinct schemas from connected database table/view/proc/function nodes
+    private var availableSchemas: [String] {
+        var schemas = Set<String>()
+        for db in connectedDatabases {
+            for folder in db.children {
+                for item in folder.children {
+                    if let dot = item.name.firstIndex(of: ".") {
+                        schemas.insert(String(item.name[item.name.startIndex..<dot]))
+                    }
+                }
+            }
+        }
+        return schemas.sorted()
+    }
+
+    /// Filter folder children by selected schemas and search text
+    private func filteredChildren(_ children: [DatabaseObject]) -> [DatabaseObject] {
+        children.filter { item in
+            let name = item.name
+            // Schema filter
+            if !selectedSchemas.isEmpty {
+                if let dot = name.firstIndex(of: ".") {
+                    let schema = String(name[name.startIndex..<dot])
+                    if !selectedSchemas.contains(schema) { return false }
+                }
+            }
+            // Text search filter
+            if !explorerSearchText.isEmpty {
+                if !name.lowercased().contains(explorerSearchText.lowercased()) { return false }
+            }
+            return true
+        }
+    }
+
+    /// Whether this folder type should be filtered (Tables, Views, Stored Procedures, Functions)
+    private func isFilterableFolder(_ folder: DatabaseObject) -> Bool {
+        folder.objectType == .folder && ["Tables", "Views", "Stored Procedures", "Functions"].contains(folder.name)
+    }
+
     private var explorerContent: some View {
         Group {
             if appState.explorerNodes.isEmpty {
@@ -290,9 +401,10 @@ struct MainView: View {
                                 if db.isExpandable && !db.children.isEmpty {
                                     DisclosureGroup(isExpanded: expandedBinding(db.id)) {
                                         ForEach(db.children) { folder in
-                                            if folder.isExpandable && !folder.children.isEmpty {
+                                            let items = isFilterableFolder(folder) ? filteredChildren(folder.children) : folder.children
+                                            if folder.isExpandable && !items.isEmpty {
                                                 DisclosureGroup(isExpanded: expandedBinding(folder.id)) {
-                                                    ForEach(folder.children) { item in
+                                                    ForEach(items) { item in
                                                         if item.isExpandable {
                                                             DisclosureGroup(isExpanded: expandedBinding(item.id)) {
                                                                 ForEach(item.children) { col in
@@ -308,7 +420,7 @@ struct MainView: View {
                                                 } label: {
                                                     explorerRow(folder)
                                                 }
-                                            } else {
+                                            } else if !isFilterableFolder(folder) {
                                                 explorerRow(folder)
                                             }
                                         }
@@ -335,9 +447,10 @@ struct MainView: View {
                                     if db.isExpandable && !db.children.isEmpty {
                                         DisclosureGroup(isExpanded: expandedBinding(db.id)) {
                                             ForEach(db.children) { folder in
-                                                if folder.isExpandable && !folder.children.isEmpty {
+                                                let items = isFilterableFolder(folder) ? filteredChildren(folder.children) : folder.children
+                                                if folder.isExpandable && !items.isEmpty {
                                                     DisclosureGroup(isExpanded: expandedBinding(folder.id)) {
-                                                        ForEach(folder.children) { item in
+                                                        ForEach(items) { item in
                                                             if item.isExpandable {
                                                                 DisclosureGroup(isExpanded: expandedBinding(item.id)) {
                                                                     ForEach(item.children) { col in
@@ -353,7 +466,7 @@ struct MainView: View {
                                                     } label: {
                                                         explorerRow(folder)
                                                     }
-                                                } else {
+                                                } else if !isFilterableFolder(folder) {
                                                     explorerRow(folder)
                                                 }
                                             }
