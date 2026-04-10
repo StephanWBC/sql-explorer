@@ -353,28 +353,35 @@ struct MainView: View {
         return schemas.sorted()
     }
 
-    /// Filter folder children by selected schemas and search text
-    private func filteredChildren(_ children: [DatabaseObject]) -> [DatabaseObject] {
-        children.filter { item in
-            let name = item.name
-            // Schema filter
-            if !selectedSchemas.isEmpty {
-                if let dot = name.firstIndex(of: ".") {
-                    let schema = String(name[name.startIndex..<dot])
-                    if !selectedSchemas.contains(schema) { return false }
-                }
-            }
-            // Text search filter
-            if !explorerSearchText.isEmpty {
-                if !name.lowercased().contains(explorerSearchText.lowercased()) { return false }
-            }
-            return true
-        }
+    private var isFilterActive: Bool {
+        !selectedSchemas.isEmpty || !explorerSearchText.isEmpty
     }
 
-    /// Whether this folder type should be filtered (Tables, Views, Stored Procedures, Functions)
-    private func isFilterableFolder(_ folder: DatabaseObject) -> Bool {
-        folder.objectType == .folder && ["Tables", "Views", "Stored Procedures", "Functions"].contains(folder.name)
+    /// All filterable objects from connected databases, flat, matching current filters
+    private var filteredFlatItems: [(folder: String, items: [DatabaseObject])] {
+        var result: [(folder: String, items: [DatabaseObject])] = []
+        let folderNames = ["Tables", "Views", "Stored Procedures", "Functions"]
+        for db in connectedDatabases {
+            for folder in db.children where folderNames.contains(folder.name) {
+                let matching = folder.children.filter { item in
+                    let name = item.name
+                    if !selectedSchemas.isEmpty {
+                        if let dot = name.firstIndex(of: ".") {
+                            let s = String(name[name.startIndex..<dot])
+                            if !selectedSchemas.contains(s) { return false }
+                        }
+                    }
+                    if !explorerSearchText.isEmpty {
+                        if !name.lowercased().contains(explorerSearchText.lowercased()) { return false }
+                    }
+                    return true
+                }
+                if !matching.isEmpty {
+                    result.append((folder: folder.name, items: matching))
+                }
+            }
+        }
+        return result
     }
 
     private var explorerContent: some View {
@@ -391,20 +398,37 @@ struct MainView: View {
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
+            } else if isFilterActive {
+                // Flat filtered list — avoids NSOutlineView crash from dynamic tree changes
+                List {
+                    ForEach(filteredFlatItems, id: \.folder) { group in
+                        Section {
+                            ForEach(group.items) { item in
+                                explorerRow(item)
+                            }
+                        } header: {
+                            Text("\(group.folder.uppercased()) (\(group.items.count))")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .tracking(0.5)
+                        }
+                    }
+                }
+                .listStyle(.sidebar)
             } else {
+                // Full tree view (no filters active)
                 ScrollViewReader { scrollProxy in
                 List {
-                    // Connected databases pinned at top — same expandable view as All Databases
+                    // Connected databases pinned at top
                     if !connectedDatabases.isEmpty {
                         Section {
                             ForEach(connectedDatabases) { db in
                                 if db.isExpandable && !db.children.isEmpty {
                                     DisclosureGroup(isExpanded: expandedBinding(db.id)) {
                                         ForEach(db.children) { folder in
-                                            let items = isFilterableFolder(folder) ? filteredChildren(folder.children) : folder.children
-                                            if folder.isExpandable && !items.isEmpty {
+                                            if folder.isExpandable && !folder.children.isEmpty {
                                                 DisclosureGroup(isExpanded: expandedBinding(folder.id)) {
-                                                    ForEach(items) { item in
+                                                    ForEach(folder.children) { item in
                                                         if item.isExpandable {
                                                             DisclosureGroup(isExpanded: expandedBinding(item.id)) {
                                                                 ForEach(item.children) { col in
@@ -420,7 +444,7 @@ struct MainView: View {
                                                 } label: {
                                                     explorerRow(folder)
                                                 }
-                                            } else if !isFilterableFolder(folder) {
+                                            } else {
                                                 explorerRow(folder)
                                             }
                                         }
@@ -439,7 +463,7 @@ struct MainView: View {
                         }
                     }
 
-                    // Full server/database tree — DisclosureGroup for programmatic expand
+                    // Full server/database tree
                     Section {
                         ForEach(appState.explorerNodes) { server in
                             DisclosureGroup(isExpanded: expandedBinding(server.id)) {
@@ -447,10 +471,9 @@ struct MainView: View {
                                     if db.isExpandable && !db.children.isEmpty {
                                         DisclosureGroup(isExpanded: expandedBinding(db.id)) {
                                             ForEach(db.children) { folder in
-                                                let items = isFilterableFolder(folder) ? filteredChildren(folder.children) : folder.children
-                                                if folder.isExpandable && !items.isEmpty {
+                                                if folder.isExpandable && !folder.children.isEmpty {
                                                     DisclosureGroup(isExpanded: expandedBinding(folder.id)) {
-                                                        ForEach(items) { item in
+                                                        ForEach(folder.children) { item in
                                                             if item.isExpandable {
                                                                 DisclosureGroup(isExpanded: expandedBinding(item.id)) {
                                                                     ForEach(item.children) { col in
@@ -466,7 +489,7 @@ struct MainView: View {
                                                     } label: {
                                                         explorerRow(folder)
                                                     }
-                                                } else if !isFilterableFolder(folder) {
+                                                } else {
                                                     explorerRow(folder)
                                                 }
                                             }
