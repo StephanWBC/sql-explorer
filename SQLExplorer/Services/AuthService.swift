@@ -37,6 +37,8 @@ class AuthService: ObservableObject {
             let config = MSALPublicClientApplicationConfig(clientId: Self.clientId)
             config.authority = try MSALAuthority(url: URL(string: Self.authority)!)
             config.redirectUri = "https://login.microsoftonline.com/common/oauth2/nativeclient"
+            // Use explicit Keychain group to avoid stale entries after reinstall/re-sign
+            config.cacheConfig.keychainSharingGroup = "com.sqlexplorer.app"
             application = try MSALPublicClientApplication(configuration: config)
         } catch {
             errorMessage = "MSAL setup failed: \(error.localizedDescription)"
@@ -62,7 +64,9 @@ class AuthService: ObservableObject {
             isSignedIn = true
             await discoverSubscriptions()
         } catch {
-            // Can't restore silently — that's fine, user will sign in
+            AppLogger.auth.warning("Session restore failed: \(error.localizedDescription)")
+            // Clear stale Keychain cache on any MSAL error to prevent -50000 on next sign-in
+            clearMSALCache()
             isSignedIn = false
         }
     }
@@ -72,35 +76,66 @@ class AuthService: ObservableObject {
     func signIn() async {
         AppLogger.auth.info("Interactive sign-in started")
         guard let app = application else { return }
+        errorMessage = nil
 
         do {
-            let webviewParams = MSALWebviewParameters()
-            webviewParams.webviewType = .wkWebView
-            let params = MSALInteractiveTokenParameters(scopes: Self.armScopes, webviewParameters: webviewParams)
-            params.promptType = .selectAccount
-
-            let result = try await app.acquireToken(with: params)
-
+            let result = try await performInteractiveSignIn(app: app)
             account = result.account
             armAccessToken = result.accessToken
             userEmail = result.account.username ?? "Signed in"
             isSignedIn = true
             errorMessage = nil
-
             await discoverSubscriptions()
+        } catch let error as NSError where error.domain == MSALErrorDomain && error.code == -50000 {
+            // Keychain error — clear stale cache and retry once
+            AppLogger.auth.warning("Keychain error (-50000), clearing cache and retrying")
+            clearMSALCache()
+            do {
+                let result = try await performInteractiveSignIn(app: app)
+                account = result.account
+                armAccessToken = result.accessToken
+                userEmail = result.account.username ?? "Signed in"
+                isSignedIn = true
+                errorMessage = nil
+                await discoverSubscriptions()
+            } catch {
+                AppLogger.auth.error("Sign-in retry failed: \(error.localizedDescription)")
+                errorMessage = "Sign-in failed. Please try again."
+                isSignedIn = false
+            }
         } catch {
             AppLogger.auth.error("Sign-in failed: \(error.localizedDescription)")
-            errorMessage = "Sign-in failed: \(error.localizedDescription)"
+            errorMessage = "Sign-in failed. Please try again."
             isSignedIn = false
         }
     }
 
-    func signOut() {
-        if let app = application, let account {
-            try? app.remove(account)
+    private func performInteractiveSignIn(app: MSALPublicClientApplication) async throws -> MSALResult {
+        let webviewParams = MSALWebviewParameters()
+        webviewParams.webviewType = .wkWebView
+        let params = MSALInteractiveTokenParameters(scopes: Self.armScopes, webviewParameters: webviewParams)
+        params.promptType = .selectAccount
+        return try await app.acquireToken(with: params)
+    }
+
+    /// Clears all MSAL cached accounts to recover from Keychain errors (e.g. after reinstall)
+    private func clearMSALCache() {
+        guard let app = application else { return }
+        do {
+            let accounts = try app.allAccounts()
+            for acct in accounts {
+                try app.remove(acct)
+            }
+            AppLogger.auth.info("Cleared \(accounts.count) stale MSAL account(s)")
+        } catch {
+            AppLogger.auth.warning("Failed to clear MSAL cache: \(error.localizedDescription)")
         }
         account = nil
         armAccessToken = nil
+    }
+
+    func signOut() {
+        clearMSALCache()
         userEmail = ""
         isSignedIn = false
         subscriptions = []
@@ -114,19 +149,23 @@ class AuthService: ObservableObject {
     func getSQLToken() async -> String? {
         guard let app = application, let account else { return nil }
 
+        // Try silent token first (uses cached refresh token — no user interaction)
         do {
             let params = MSALSilentTokenParameters(scopes: Self.sqlScopes, account: account)
             return try await app.acquireTokenSilent(with: params).accessToken
         } catch {
-            do {
-                let webviewParams = MSALWebviewParameters()
-                webviewParams.webviewType = .wkWebView
-                let params = MSALInteractiveTokenParameters(scopes: Self.sqlScopes, webviewParameters: webviewParams)
-                return try await app.acquireToken(with: params).accessToken
-            } catch {
-                errorMessage = "SQL token failed: \(error.localizedDescription)"
-                return nil
-            }
+            AppLogger.auth.warning("Silent SQL token failed, falling back to interactive: \(error.localizedDescription)")
+        }
+
+        // Fall back to interactive auth
+        do {
+            let webviewParams = MSALWebviewParameters()
+            webviewParams.webviewType = .wkWebView
+            let params = MSALInteractiveTokenParameters(scopes: Self.sqlScopes, webviewParameters: webviewParams)
+            return try await app.acquireToken(with: params).accessToken
+        } catch {
+            errorMessage = "SQL token failed. Please sign out and sign in again."
+            return nil
         }
     }
 
