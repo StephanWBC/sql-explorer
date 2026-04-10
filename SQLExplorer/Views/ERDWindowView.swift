@@ -410,28 +410,43 @@ struct ERDCanvasAreaView: View {
 struct ERDSidebarView: View {
     @ObservedObject var schema: ERDSchema
     @Binding var searchText: String
+    @State private var selectedSchemas: Set<String> = []
     let onAddTable: (ERDTableEntry) -> Void
     let onRemoveTable: (ERDTable) -> Void
 
-    private var filteredTables: [ERDTableEntry] {
-        let available = schema.availableTables
-        if searchText.isEmpty { return available }
-        let q = searchText.lowercased()
-        return available.filter { $0.fullName.lowercased().contains(q) }
+    /// All distinct schema names from available tables
+    private var allSchemas: [String] {
+        Array(Set(schema.availableTables.map(\.schema))).sorted()
     }
 
-    /// Related tables grouped by which canvas table they connect to, filtered by search
+    /// Whether a table passes the current schema + text filters
+    private func passesFilter(schema s: String, fullName: String) -> Bool {
+        if !selectedSchemas.isEmpty && !selectedSchemas.contains(s) { return false }
+        if !searchText.isEmpty {
+            let q = searchText.lowercased()
+            if !fullName.lowercased().contains(q) { return false }
+        }
+        return true
+    }
+
+    /// Available tables filtered by schema selection + search, grouped by schema
+    private var groupedAvailableTables: [(schema: String, tables: [ERDTableEntry])] {
+        let filtered = schema.availableTables.filter { passesFilter(schema: $0.schema, fullName: $0.fullName) }
+        let grouped = Dictionary(grouping: filtered, by: \.schema)
+        return grouped.sorted(by: { $0.key < $1.key })
+            .map { (schema: $0.key, tables: $0.value.sorted(by: { $0.name < $1.name })) }
+    }
+
+    private var totalAvailableCount: Int {
+        groupedAvailableTables.reduce(0) { $0 + $1.tables.count }
+    }
+
+    /// Related tables grouped by canvas table, filtered by schema + search
     private var groupedRelatedTables: [(canvasTable: String, related: [ERDRelatedTable])] {
         let onCanvas = schema.tablesOnCanvas
         let filtered = schema.relatedTables.filter { rel in
-            // Exclude tables already on canvas
             guard !onCanvas.contains(rel.fullName) else { return false }
-            // Apply search filter
-            if !searchText.isEmpty {
-                let q = searchText.lowercased()
-                return rel.fullName.lowercased().contains(q)
-            }
-            return true
+            return passesFilter(schema: rel.schema, fullName: rel.fullName)
         }
         let grouped = Dictionary(grouping: filtered, by: \.relatedToTable)
         return grouped.sorted(by: { $0.key < $1.key })
@@ -467,7 +482,32 @@ struct ERDSidebarView: View {
             .padding(.vertical, 5)
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.4))
             .cornerRadius(5)
-            .padding(8)
+            .padding(.horizontal, 8)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+
+            // Schema filter chips
+            if allSchemas.count > 1 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 4) {
+                        ForEach(allSchemas, id: \.self) { s in
+                            schemaChip(s)
+                        }
+                        if !selectedSchemas.isEmpty {
+                            Button {
+                                selectedSchemas.removeAll()
+                            } label: {
+                                Text("Clear")
+                                    .font(.system(size: 9))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                }
+                .padding(.bottom, 4)
+            }
 
             Divider()
 
@@ -503,10 +543,13 @@ struct ERDSidebarView: View {
                             }
                         }
 
-                        // Available tables
-                        sectionHeader("AVAILABLE (\(filteredTables.count))", color: .secondary)
-                        ForEach(filteredTables) { entry in
-                            availableTableRow(entry)
+                        // Available tables grouped by schema
+                        sectionHeader("AVAILABLE (\(totalAvailableCount))", color: .secondary)
+                        ForEach(groupedAvailableTables, id: \.schema) { group in
+                            schemaGroupHeader(group.schema, count: group.tables.count)
+                            ForEach(group.tables) { entry in
+                                availableTableRow(entry)
+                            }
                         }
                     }
                     .padding(.vertical, 4)
@@ -524,6 +567,51 @@ struct ERDSidebarView: View {
             .padding(.horizontal, 12)
             .padding(.top, 10)
             .padding(.bottom, 4)
+    }
+
+    @ViewBuilder
+    private func schemaChip(_ s: String) -> some View {
+        let isSelected = selectedSchemas.contains(s)
+        Button {
+            if isSelected {
+                selectedSchemas.remove(s)
+            } else {
+                selectedSchemas.insert(s)
+            }
+        } label: {
+            Text(s)
+                .font(.system(size: 9, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isSelected ? Color.accentColor : Color(nsColor: .controlBackgroundColor).opacity(0.5))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .strokeBorder(isSelected ? Color.clear : Color.secondary.opacity(0.3), lineWidth: 0.5)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    @ViewBuilder
+    private func schemaGroupHeader(_ schemaName: String, count: Int) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "folder.fill")
+                .foregroundStyle(.blue.opacity(0.5))
+                .font(.system(size: 8))
+            Text("\(schemaName)")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.blue.opacity(0.7))
+            Text("(\(count))")
+                .font(.system(size: 9))
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
     }
 
     @ViewBuilder
