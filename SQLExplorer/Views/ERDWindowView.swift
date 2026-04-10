@@ -47,8 +47,15 @@ struct ERDWindowView: View {
 // MARK: - Canvas Area (observes schema for live updates)
 
 struct ERDCanvasAreaView: View {
+    @EnvironmentObject var appState: AppState
     @ObservedObject var schema: ERDSchema
     @Binding var showSidebar: Bool
+    @State private var showSaveDialog = false
+    @State private var saveName = ""
+
+    private var diagramsForDatabase: [SavedDiagram] {
+        appState.userDataStore.savedDiagrams.filter { $0.databaseName == schema.databaseName }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -72,6 +79,12 @@ struct ERDCanvasAreaView: View {
                 Text(schema.databaseName)
                     .font(.system(size: 12, weight: .semibold))
 
+                if !schema.savedDiagramName.isEmpty {
+                    Text("— \(schema.savedDiagramName)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+
                 Spacer()
 
                 if schema.isAddingTable {
@@ -90,25 +103,56 @@ struct ERDCanvasAreaView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                // Save button
+                Button {
+                    if schema.savedDiagramId != nil {
+                        // Quick-save to existing diagram
+                        appState.saveDiagram(name: schema.savedDiagramName)
+                    } else {
+                        saveName = schema.databaseName + " Diagram"
+                        showSaveDialog = true
+                    }
+                } label: {
+                    toolbarButton(icon: "square.and.arrow.down", label: "Save")
+                }
+                .buttonStyle(.plain)
+                .help(schema.savedDiagramId != nil ? "Save diagram (Cmd+S)" : "Save diagram as...")
+                .disabled(schema.tables.isEmpty)
+
+                // Load menu
+                Menu {
+                    if diagramsForDatabase.isEmpty {
+                        Text("No saved diagrams")
+                    } else {
+                        ForEach(diagramsForDatabase) { diagram in
+                            Button {
+                                Task { await appState.loadDiagram(diagram) }
+                            } label: {
+                                Label(diagram.name, systemImage: "rectangle.connected.to.line.below")
+                            }
+                        }
+                        Divider()
+                        Menu("Delete...") {
+                            ForEach(diagramsForDatabase) { diagram in
+                                Button(role: .destructive) {
+                                    appState.deleteDiagram(diagram.id)
+                                } label: {
+                                    Label(diagram.name, systemImage: "trash")
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    toolbarButton(icon: "folder", label: "Open")
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 70)
+                .help("Load saved diagram")
+
                 Button {
                     autoArrangeLayout()
                 } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "wand.and.stars")
-                            .font(.system(size: 10))
-                        Text("Auto Arrange")
-                            .font(.system(size: 10, weight: .medium))
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 5)
-                            .fill(Color.accentColor.opacity(0.15))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 5)
-                            .strokeBorder(Color.accentColor.opacity(0.3), lineWidth: 0.5)
-                    )
+                    toolbarButton(icon: "wand.and.stars", label: "Arrange")
                 }
                 .buttonStyle(.plain)
                 .help("Auto arrange tables based on relationships")
@@ -117,6 +161,16 @@ struct ERDCanvasAreaView: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(.bar)
+            .alert("Save Diagram", isPresented: $showSaveDialog) {
+                TextField("Diagram name", text: $saveName)
+                Button("Save") {
+                    guard !saveName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+                    appState.saveDiagram(name: saveName)
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Enter a name for this diagram")
+            }
 
             Divider()
 
@@ -328,6 +382,26 @@ struct ERDCanvasAreaView: View {
         }
 
         schema.objectWillChange.send()
+    }
+
+    @ViewBuilder
+    private func toolbarButton(icon: String, label: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+            Text(label)
+                .font(.system(size: 10, weight: .medium))
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            RoundedRectangle(cornerRadius: 5)
+                .fill(Color.accentColor.opacity(0.15))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 5)
+                .strokeBorder(Color.accentColor.opacity(0.3), lineWidth: 0.5)
+        )
     }
 }
 

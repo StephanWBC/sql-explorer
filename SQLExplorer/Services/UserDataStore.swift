@@ -5,6 +5,7 @@ class UserDataStore: ObservableObject {
     @Published var favorites: [FavoriteDatabase] = []
     @Published var groups: [DatabaseGroup] = []
     @Published var savedQueries: [SavedQuery] = []
+    @Published var savedDiagrams: [SavedDiagram] = []
     @Published var queryHistory: [QueryHistoryEntry] = []
 
     private static let storeDir = FileManager.default.homeDirectoryForCurrentUser
@@ -15,6 +16,7 @@ class UserDataStore: ObservableObject {
         var favorites: [FavoriteDatabase] = []
         var groups: [DatabaseGroup] = []
         var savedQueries: [SavedQuery] = []
+        var savedDiagrams: [SavedDiagram] = []
         var queryHistory: [QueryHistoryEntry] = []
     }
 
@@ -28,11 +30,12 @@ class UserDataStore: ObservableObject {
         favorites = store.favorites
         groups = store.groups
         savedQueries = store.savedQueries
+        savedDiagrams = store.savedDiagrams
         queryHistory = store.queryHistory
     }
 
     func save() {
-        let store = StoreData(favorites: favorites, groups: groups, savedQueries: savedQueries, queryHistory: queryHistory)
+        let store = StoreData(favorites: favorites, groups: groups, savedQueries: savedQueries, savedDiagrams: savedDiagrams, queryHistory: queryHistory)
         try? FileManager.default.createDirectory(at: Self.storeDir, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -114,6 +117,22 @@ class UserDataStore: ObservableObject {
 
     func deleteSavedQuery(_ id: UUID) {
         savedQueries.removeAll { $0.id == id }
+        save()
+    }
+
+    // MARK: - Saved Diagrams
+
+    func saveDiagram(_ diagram: SavedDiagram) {
+        if let idx = savedDiagrams.firstIndex(where: { $0.id == diagram.id }) {
+            savedDiagrams[idx] = diagram
+        } else {
+            savedDiagrams.append(diagram)
+        }
+        save()
+    }
+
+    func deleteSavedDiagram(_ id: UUID) {
+        savedDiagrams.removeAll { $0.id == id }
         save()
     }
 

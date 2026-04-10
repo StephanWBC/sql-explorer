@@ -427,6 +427,15 @@ class AppState: ObservableObject {
         let schema = ERDSchema()
         schema.databaseName = databaseName
         schema.connectionId = connectionId
+        // Resolve serverFqdn from explorer nodes
+        for node in explorerNodes {
+            for child in node.children where child.name == databaseName && child.connectionId == connectionId {
+                schema.serverFqdn = child.serverFqdn ?? node.serverFqdn ?? node.name
+            }
+            if node.connectionId == connectionId {
+                schema.serverFqdn = node.serverFqdn ?? node.name
+            }
+        }
         erdSchema = schema
 
         // Fetch table list in background — canvas is already usable
@@ -498,6 +507,77 @@ class AppState: ObservableObject {
             // Fallback: remove stale relationships directly
             schema.relationships.removeAll { $0.fromTable == table.fullName || $0.toTable == table.fullName }
             schema.relatedTables.removeAll()
+        }
+    }
+
+    // MARK: - Diagram Save / Load
+
+    func saveDiagram(name: String) {
+        guard let schema = erdSchema else { return }
+        let tables = schema.tables.map {
+            SavedDiagramTable(schema: $0.schema, name: $0.name, x: $0.position.x, y: $0.position.y)
+        }
+        let diagram = SavedDiagram(
+            id: schema.savedDiagramId ?? UUID(),
+            name: name,
+            databaseName: schema.databaseName,
+            serverFqdn: schema.serverFqdn,
+            tables: tables
+        )
+        userDataStore.saveDiagram(diagram)
+        schema.savedDiagramId = diagram.id
+        schema.savedDiagramName = name
+        statusMessage = "Diagram \"\(name)\" saved"
+    }
+
+    func loadDiagram(_ diagram: SavedDiagram) async {
+        guard let schema = erdSchema, let connId = schema.connectionId else { return }
+        guard schema.databaseName == diagram.databaseName else {
+            statusMessage = "Diagram is for database \"\(diagram.databaseName)\""
+            return
+        }
+
+        schema.isAddingTable = true
+        schema.tables.removeAll()
+        schema.relationships.removeAll()
+        schema.relatedTables.removeAll()
+        schema.cachedForeignKeys = nil
+        schema.savedDiagramId = diagram.id
+        schema.savedDiagramName = diagram.name
+
+        do {
+            for saved in diagram.tables {
+                let columns = try await ERDService.loadTableColumns(
+                    connectionManager: connectionManager, connectionId: connId,
+                    schemaName: saved.schema, tableName: saved.name)
+                let table = ERDTable(schema: saved.schema, name: saved.name,
+                                     columns: columns,
+                                     position: CGPoint(x: saved.x, y: saved.y))
+                schema.tables.append(table)
+            }
+
+            // Load FKs and compute relationships + related tables
+            if schema.cachedForeignKeys == nil {
+                schema.cachedForeignKeys = try await ERDService.loadAllForeignKeys(
+                    connectionManager: connectionManager, connectionId: connId)
+            }
+            let allFKs = schema.cachedForeignKeys!
+            let names = schema.tablesOnCanvas
+            schema.relationships = ERDService.filterRelationships(from: allFKs, tablesOnCanvas: names)
+            schema.relatedTables = ERDService.filterRelatedTables(from: allFKs, tablesOnCanvas: names)
+            statusMessage = "Loaded diagram \"\(diagram.name)\""
+        } catch {
+            statusMessage = "Failed to load diagram: \(error.localizedDescription)"
+        }
+
+        schema.isAddingTable = false
+    }
+
+    func deleteDiagram(_ id: UUID) {
+        userDataStore.deleteSavedDiagram(id)
+        if erdSchema?.savedDiagramId == id {
+            erdSchema?.savedDiagramId = nil
+            erdSchema?.savedDiagramName = ""
         }
     }
 

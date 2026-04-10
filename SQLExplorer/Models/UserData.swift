@@ -43,6 +43,28 @@ struct DatabaseGroup: Codable, Identifiable, Hashable {
     }
 }
 
+struct SavedDiagram: Codable, Identifiable, Hashable {
+    let id: UUID
+    var name: String
+    let databaseName: String
+    let serverFqdn: String
+    var tables: [SavedDiagramTable]
+    var savedAt: Date
+
+    init(id: UUID = UUID(), name: String, databaseName: String, serverFqdn: String,
+         tables: [SavedDiagramTable] = [], savedAt: Date = Date()) {
+        self.id = id; self.name = name; self.databaseName = databaseName
+        self.serverFqdn = serverFqdn; self.tables = tables; self.savedAt = savedAt
+    }
+}
+
+struct SavedDiagramTable: Codable, Hashable {
+    let schema: String
+    let name: String
+    let x: Double
+    let y: Double
+}
+
 struct QueryHistoryEntry: Codable, Identifiable, Hashable {
     let id: UUID
     let sql: String

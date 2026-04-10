@@ -28,6 +28,20 @@ struct SQLExplorerApp: App {
             }
 
             CommandGroup(replacing: .saveItem) {
+                Button("Save Diagram") {
+                    if let schema = appState.erdSchema, !schema.tables.isEmpty {
+                        if schema.savedDiagramId != nil {
+                            appState.saveDiagram(name: schema.savedDiagramName)
+                        } else {
+                            appState.saveDiagram(name: schema.databaseName + " Diagram")
+                        }
+                    }
+                }
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(appState.erdSchema?.tables.isEmpty ?? true)
+
+                Divider()
+
                 Button("Close Tab") {
                     appState.closeCurrentTab()
                 }

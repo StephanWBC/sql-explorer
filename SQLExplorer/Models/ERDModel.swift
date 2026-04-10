@@ -88,7 +88,12 @@ class ERDSchema: ObservableObject {
 
     // Connection info
     var databaseName: String = ""
+    var serverFqdn: String = ""
     var connectionId: UUID?
+
+    // Saved diagram tracking (nil = unsaved)
+    var savedDiagramId: UUID?
+    var savedDiagramName: String = ""
 
     var tablesOnCanvas: Set<String> {
         Set(tables.map(\.fullName))
