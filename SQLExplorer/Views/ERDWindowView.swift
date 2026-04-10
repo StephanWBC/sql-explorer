@@ -464,7 +464,7 @@ struct ERDSidebarView: View {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                     .font(.system(size: 10))
-                TextField("Filter tables...", text: $searchText)
+                TextField("Search tables...", text: $searchText)
                     .textFieldStyle(.plain)
                     .font(.system(size: 11))
                 if !searchText.isEmpty {
@@ -488,6 +488,16 @@ struct ERDSidebarView: View {
 
             // Schema filter chips
             if allSchemas.count > 1 {
+                HStack {
+                    Text("SCHEMAS")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .tracking(0.5)
+                    Spacer()
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 2)
+
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 4) {
                         ForEach(allSchemas, id: \.self) { s in

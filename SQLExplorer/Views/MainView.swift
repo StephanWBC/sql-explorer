@@ -52,7 +52,7 @@ struct MainView: View {
                             Image(systemName: "magnifyingglass")
                                 .foregroundStyle(.secondary)
                                 .font(.system(size: 10))
-                            TextField("Filter...", text: $explorerSearchText)
+                            TextField("Search tables, views...", text: $explorerSearchText)
                                 .textFieldStyle(.plain)
                                 .font(.system(size: 11))
                             if !explorerSearchText.isEmpty {
@@ -73,6 +73,16 @@ struct MainView: View {
                         .padding(.bottom, 4)
 
                         // Schema chips
+                        HStack {
+                            Text("SCHEMAS")
+                                .font(.system(size: 8, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                                .tracking(0.5)
+                            Spacer()
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.bottom, 2)
+
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 4) {
                                 ForEach(availableSchemas, id: \.self) { s in
