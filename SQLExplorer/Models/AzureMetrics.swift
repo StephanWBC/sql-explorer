@@ -25,14 +25,28 @@ enum MetricTimeRange: String, CaseIterable, Identifiable {
     }
 
     /// ISO-8601 duration suitable for the time range.
+    /// Kept tight (smaller buckets = less smoothing) so peaks survive aggregation.
     var interval: String {
         switch self {
         case .last1h:  return "PT1M"
         case .last6h:  return "PT5M"
-        case .last24h: return "PT15M"
-        case .last7d:  return "PT1H"
+        case .last24h: return "PT5M"
+        case .last7d:  return "PT30M"
         }
     }
+}
+
+/// How a metric's value should be interpreted.
+///
+/// Azure Monitor returns Average / Maximum / Total for every datapoint, but the *meaningful*
+/// aggregation differs per metric:
+/// - **Gauges** are instantaneous % or counts (CPU %, Log IO %, storage %). The portal plots
+///   the `maximum` per bucket so spikes are visible. The headline is the latest reading.
+/// - **Counters** are events-per-interval (successful connections, deadlocks). The `total`
+///   per bucket is the count in that bucket; the window total is the sum across all buckets.
+enum MetricKind {
+    case gauge
+    case counter
 }
 
 struct MetricDataPoint: Identifiable, Hashable {
@@ -42,9 +56,6 @@ struct MetricDataPoint: Identifiable, Hashable {
     let total: Double?
 
     var id: Date { timestamp }
-
-    /// First non-nil value in priority Average → Total → Maximum.
-    var primaryValue: Double? { average ?? total ?? maximum }
 }
 
 struct MetricSeries: Identifiable {
@@ -57,18 +68,51 @@ struct MetricSeries: Identifiable {
 
     var isPercentage: Bool { unit.lowercased() == "percent" }
 
-    var latestValue: Double? {
-        dataPoints.reversed().first { $0.primaryValue != nil }?.primaryValue
+    /// Classifies a metric by name. Counters are Azure SQL's count-type metrics where
+    /// the sum-over-window is what the user actually wants to see.
+    var kind: MetricKind {
+        switch metricName {
+        case "deadlock", "connection_successful", "connection_failed", "blocked_by_firewall":
+            return .counter
+        default:
+            return .gauge
+        }
     }
 
-    /// First non-nil data point in the series (used for trend delta).
-    var firstValue: Double? {
-        dataPoints.first { $0.primaryValue != nil }?.primaryValue
+    /// The value to plot for this point given the metric's kind.
+    /// - Gauges: `maximum` (matches the Azure Portal's default aggregation). Falls back to
+    ///   `average` if `maximum` is missing.
+    /// - Counters: `total` (events in the bucket). Nil buckets are treated as 0 for
+    ///   counters so the chart doesn't render gaps during quiet periods.
+    func plotValue(for point: MetricDataPoint) -> Double? {
+        switch kind {
+        case .gauge:
+            return point.maximum ?? point.average
+        case .counter:
+            return point.total ?? 0
+        }
     }
 
-    /// All non-nil values in the series.
+    /// All plotted values (nil buckets dropped for gauges, treated as 0 for counters).
     var values: [Double] {
-        dataPoints.compactMap { $0.primaryValue }
+        dataPoints.compactMap { plotValue(for: $0) }
+    }
+
+    /// Latest non-nil plotted value — used as the "current" reading for gauges.
+    var latestValue: Double? {
+        dataPoints.reversed().compactMap { plotValue(for: $0) }.first
+    }
+
+    /// First non-nil plotted value — used for trend delta on gauges.
+    var firstValue: Double? {
+        dataPoints.compactMap { plotValue(for: $0) }.first
+    }
+
+    /// Sum of all plotted values. For counters this is the total events in the window.
+    var sumValue: Double? {
+        let v = values
+        guard !v.isEmpty else { return nil }
+        return v.reduce(0, +)
     }
 
     var minValue: Double? { values.min() }
@@ -87,13 +131,23 @@ struct MetricSeries: Identifiable {
         return sorted[max(0, min(sorted.count - 1, rank))]
     }
 
-    /// Data point with the maximum primary value (useful for debugging spikes).
+    /// Data point with the maximum plotted value (useful for debugging spikes).
     var peakPoint: MetricDataPoint? {
         dataPoints
             .compactMap { p -> (MetricDataPoint, Double)? in
-                guard let v = p.primaryValue else { return nil }
+                guard let v = plotValue(for: p) else { return nil }
                 return (p, v)
             }
             .max(by: { $0.1 < $1.1 })?.0
+    }
+
+    /// Headline (big number in the card header):
+    /// - Gauges: current value (latest reading)
+    /// - Counters: sum across the visible window (e.g. "47 connections in 24h")
+    var headlineValue: Double? {
+        switch kind {
+        case .gauge:   return latestValue
+        case .counter: return sumValue
+        }
     }
 }

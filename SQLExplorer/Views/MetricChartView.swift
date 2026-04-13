@@ -27,8 +27,11 @@ struct MetricChartView: View {
         return String(format: "%.2f", v)
     }
 
-    private var formattedLatest: String {
-        guard let v = series.latestValue else { return "—" }
+    /// Headline value shown in the card header.
+    /// - Gauges: current/latest value.
+    /// - Counters: sum across the visible window (e.g. "47 connections").
+    private var formattedHeadline: String {
+        guard let v = series.headlineValue else { return "—" }
         return format(v)
     }
 
@@ -41,8 +44,10 @@ struct MetricChartView: View {
     }
 
     /// Trend delta: latest - first (absolute in metric units).
+    /// Only shown for gauges — "trend" on a counter (events per bucket) is not meaningful.
     private var trend: (symbol: String, text: String, color: Color)? {
-        guard let first = series.firstValue, let last = series.latestValue else { return nil }
+        guard series.kind == .gauge,
+              let first = series.firstValue, let last = series.latestValue else { return nil }
         let delta = last - first
         // Hide ~zero trends to reduce noise.
         let threshold = series.isPercentage ? 0.5 : max(0.5, abs(first) * 0.01)
@@ -72,7 +77,7 @@ struct MetricChartView: View {
             statsRow
             chart
                 .frame(height: isExpanded ? 360 : 160)
-            if isExpanded, let peak = series.peakPoint, let v = peak.primaryValue {
+            if isExpanded, let peak = series.peakPoint, let v = series.plotValue(for: peak) {
                 peakCallout(timestamp: peak.timestamp, value: v)
             }
         }
@@ -97,7 +102,7 @@ struct MetricChartView: View {
             Button("Copy latest value") {
                 let pb = NSPasteboard.general
                 pb.clearContents()
-                pb.setString(formattedLatest, forType: .string)
+                pb.setString(formattedHeadline, forType: .string)
             }
             Button("Copy CSV") {
                 let pb = NSPasteboard.general
@@ -133,7 +138,7 @@ struct MetricChartView: View {
 
             Spacer()
 
-            Text(formattedLatest)
+            Text(formattedHeadline)
                 .font(.system(size: 13, weight: .bold).monospacedDigit())
                 .foregroundStyle(.primary)
 
@@ -154,10 +159,22 @@ struct MetricChartView: View {
     @ViewBuilder
     private var statsRow: some View {
         HStack(spacing: 10) {
-            stat("Min", series.minValue)
-            stat("Avg", series.avgValue)
-            stat("P95", series.p95Value)
-            stat("Max", series.maxValue)
+            switch series.kind {
+            case .gauge:
+                // Classic Min/Avg/P95/Max over the window — what you want for %s and gauges.
+                stat("Min", series.minValue)
+                stat("Avg", series.avgValue)
+                stat("P95", series.p95Value)
+                stat("Max", series.maxValue)
+            case .counter:
+                // For counters the sum-over-window is already the headline; here we show
+                // the biggest single bucket and the per-bucket average so you can see how
+                // bursty the traffic is, plus the "latest bucket" as a current indicator.
+                stat("Total", series.sumValue)
+                stat("Peak/bucket", series.maxValue)
+                stat("Avg/bucket", series.avgValue)
+                stat("Latest", series.latestValue)
+            }
         }
         .font(.system(size: 10).monospacedDigit())
         .foregroundStyle(.secondary)
@@ -186,7 +203,7 @@ struct MetricChartView: View {
     private var chart: some View {
         let base = Chart {
             ForEach(series.dataPoints) { point in
-                if let v = point.primaryValue {
+                if let v = series.plotValue(for: point) {
                     LineMark(
                         x: .value("Time", point.timestamp),
                         y: .value(series.displayName, v)
@@ -208,7 +225,7 @@ struct MetricChartView: View {
                 }
             }
 
-            if let hp = hoverPoint, let v = hp.primaryValue {
+            if let hp = hoverPoint, let v = series.plotValue(for: hp) {
                 RuleMark(x: .value("Time", hp.timestamp))
                     .foregroundStyle(Color.secondary.opacity(0.5))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
@@ -253,7 +270,7 @@ struct MetricChartView: View {
                         }
                     }
 
-                if let hp = hoverPoint, let v = hp.primaryValue,
+                if let hp = hoverPoint, let v = series.plotValue(for: hp),
                    let plotFrame = proxy.plotFrame.map({ geo[$0] }),
                    let x = proxy.position(forX: hp.timestamp) {
                     hoverTooltip(timestamp: hp.timestamp, value: v)
@@ -314,9 +331,9 @@ struct MetricChartView: View {
             return
         }
         guard let date: Date = proxy.value(atX: xInPlot) else { return }
-        // Nearest data point with a non-nil value.
+        // Nearest data point with a plottable value.
         let nearest = series.dataPoints
-            .filter { $0.primaryValue != nil }
+            .filter { series.plotValue(for: $0) != nil }
             .min(by: { abs($0.timestamp.timeIntervalSince(date)) < abs($1.timestamp.timeIntervalSince(date)) })
         hoverPoint = nearest
     }
@@ -328,7 +345,7 @@ struct MetricChartView: View {
         let fmt = ISO8601DateFormatter()
         fmt.formatOptions = [.withInternetDateTime]
         for p in series.dataPoints {
-            guard let v = p.primaryValue else { continue }
+            guard let v = series.plotValue(for: p) else { continue }
             lines.append("\(fmt.string(from: p.timestamp)),\(v)")
         }
         return lines.joined(separator: "\n")
