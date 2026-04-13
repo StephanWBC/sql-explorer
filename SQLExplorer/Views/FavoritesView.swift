@@ -195,11 +195,14 @@ struct FavoritesView: View {
             Menu("Add to Group") {
                 ForEach(userDataStore.groups) { group in
                     Button(group.name) {
-                        userDataStore.addToGroup(
-                            groupId: group.id,
+                        userDataStore.addToGroup(groupId: group.id, descriptor: ConnectionDescriptor(
+                            kind: fav.kind,
                             databaseName: fav.databaseName, serverFqdn: fav.serverFqdn,
+                            alias: fav.displayName,
                             subscriptionId: fav.subscriptionId, subscriptionName: fav.subscriptionName,
-                            alias: fav.displayName)
+                            port: fav.port, username: fav.username,
+                            keychainRef: fav.keychainRef,
+                            encrypt: fav.encrypt, trustServerCertificate: fav.trustServerCertificate))
                     }
                 }
             }
@@ -235,6 +238,13 @@ struct FavoriteRow: View {
         appState.isConnected(databaseName: favorite.databaseName, serverFqdn: favorite.serverFqdn)
     }
 
+    private var secondaryLabel: String {
+        if let sub = favorite.subscriptionName, !sub.isEmpty {
+            return "\(favorite.shortServer)  ·  \(sub)"
+        }
+        return favorite.shortServer
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             Circle()
@@ -252,7 +262,7 @@ struct FavoriteRow: View {
                         .foregroundStyle(connected ? .primary : .secondary)
                     SubscriptionPill(favorite: favorite, appState: appState)
                 }
-                Text("\(favorite.shortServer)  ·  \(favorite.subscriptionName)")
+                Text(secondaryLabel)
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
             }

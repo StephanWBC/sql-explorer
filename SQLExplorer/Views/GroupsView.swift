@@ -225,9 +225,7 @@ struct GroupsView: View {
         let isFav = appState.userDataStore.isFavorite(
             databaseName: member.databaseName, serverFqdn: member.serverFqdn)
         Button {
-            appState.userDataStore.toggleFavorite(
-                databaseName: member.databaseName, serverFqdn: member.serverFqdn,
-                subscriptionId: member.subscriptionId, subscriptionName: member.subscriptionName)
+            appState.userDataStore.toggleFavorite(descriptor: descriptor(for: member))
         } label: {
             Image(systemName: isFav ? "star.fill" : "star")
                 .font(.system(size: 10))
@@ -235,6 +233,17 @@ struct GroupsView: View {
         }
         .buttonStyle(.plain)
         .help(isFav ? "Remove from favorites" : "Add to favorites")
+    }
+
+    private func descriptor(for member: GroupMember) -> ConnectionDescriptor {
+        ConnectionDescriptor(
+            kind: member.kind,
+            databaseName: member.databaseName, serverFqdn: member.serverFqdn,
+            alias: member.alias,
+            subscriptionId: member.subscriptionId, subscriptionName: member.subscriptionName,
+            port: member.port, username: member.username,
+            keychainRef: member.keychainRef,
+            encrypt: member.encrypt, trustServerCertificate: member.trustServerCertificate)
     }
 
     // MARK: - Schema tree row
@@ -309,25 +318,19 @@ struct GroupsView: View {
         let isFav = appState.userDataStore.isFavorite(
             databaseName: member.databaseName, serverFqdn: member.serverFqdn)
         Button {
-            appState.userDataStore.toggleFavorite(
-                databaseName: member.databaseName, serverFqdn: member.serverFqdn,
-                subscriptionId: member.subscriptionId, subscriptionName: member.subscriptionName)
+            appState.userDataStore.toggleFavorite(descriptor: descriptor(for: member))
         } label: {
             Label(isFav ? "Remove from Favorites" : "Add to Favorites",
                   systemImage: isFav ? "star.slash" : "star.fill")
         }
 
-        // Add to another group
+        // Add to another group — preserves kind/keychainRef/etc. across groups.
         let otherGroups = appState.userDataStore.groups.filter { $0.id != group.id }
         if !otherGroups.isEmpty {
             Menu("Add to Group") {
                 ForEach(otherGroups) { g in
                     Button(g.name) {
-                        appState.userDataStore.addToGroup(
-                            groupId: g.id,
-                            databaseName: member.databaseName, serverFqdn: member.serverFqdn,
-                            subscriptionId: member.subscriptionId, subscriptionName: member.subscriptionName,
-                            alias: member.alias)
+                        appState.userDataStore.addToGroup(groupId: g.id, descriptor: descriptor(for: member))
                     }
                 }
             }
@@ -410,9 +413,14 @@ struct GroupMemberRow: View {
             Spacer()
 
             Button {
-                appState.userDataStore.toggleFavorite(
+                appState.userDataStore.toggleFavorite(descriptor: ConnectionDescriptor(
+                    kind: member.kind,
                     databaseName: member.databaseName, serverFqdn: member.serverFqdn,
-                    subscriptionId: member.subscriptionId, subscriptionName: member.subscriptionName)
+                    alias: member.alias,
+                    subscriptionId: member.subscriptionId, subscriptionName: member.subscriptionName,
+                    port: member.port, username: member.username,
+                    keychainRef: member.keychainRef,
+                    encrypt: member.encrypt, trustServerCertificate: member.trustServerCertificate))
             } label: {
                 Image(systemName: isFavorite ? "star.fill" : "star")
                     .font(.system(size: 10))
@@ -425,15 +433,19 @@ struct GroupMemberRow: View {
     }
 }
 
-/// Small pill shown beside a Group/Favorite member's alias when the member lives
-/// in a different Azure subscription than the one currently selected in the picker.
-/// Helps distinguish cross-subscription entries (e.g. Production on a separate sub).
+/// Small pill shown beside a Group/Favorite member's alias.
+/// - Azure-kind member from a *different* subscription than the active picker → orange
+///   subscription-name pill (helps distinguish cross-subscription entries).
+/// - Manual-kind member (no Azure subscription at all) → purple "Manual" pill.
+/// - Azure member matching the active subscription → no pill.
 struct SubscriptionPill: View {
-    let subscriptionId: String
-    let subscriptionName: String
+    let kind: ConnectionKind
+    let subscriptionId: String?
+    let subscriptionName: String?
     @ObservedObject var appState: AppState
 
-    init(subscriptionId: String, subscriptionName: String, appState: AppState) {
+    init(kind: ConnectionKind, subscriptionId: String?, subscriptionName: String?, appState: AppState) {
+        self.kind = kind
         self.subscriptionId = subscriptionId
         self.subscriptionName = subscriptionName
         self.appState = appState
@@ -441,6 +453,7 @@ struct SubscriptionPill: View {
 
     init(member: GroupMember, appState: AppState) {
         self.init(
+            kind: member.kind,
             subscriptionId: member.subscriptionId,
             subscriptionName: member.subscriptionName,
             appState: appState)
@@ -448,32 +461,42 @@ struct SubscriptionPill: View {
 
     init(favorite: FavoriteDatabase, appState: AppState) {
         self.init(
+            kind: favorite.kind,
             subscriptionId: favorite.subscriptionId,
             subscriptionName: favorite.subscriptionName,
             appState: appState)
     }
 
-    private var isForeign: Bool {
-        guard let active = appState.authService.selectedSubscription else { return false }
-        return !subscriptionId.isEmpty && subscriptionId != active.id
+    private var isForeignAzure: Bool {
+        guard kind == .azureEntra,
+              let id = subscriptionId, !id.isEmpty else { return false }
+        // No active subscription → treat any tagged azure member as "foreign" so the
+        // user still sees which subscription it belongs to.
+        guard let active = appState.authService.selectedSubscription else { return true }
+        return id != active.id
     }
 
     var body: some View {
-        if isForeign && !subscriptionName.isEmpty {
-            Text(subscriptionName)
-                .font(.system(size: 9, weight: .medium))
-                .foregroundStyle(.orange)
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(
-                    Capsule()
-                        .fill(Color.orange.opacity(0.15))
-                )
-                .overlay(
-                    Capsule()
-                        .strokeBorder(Color.orange.opacity(0.4), lineWidth: 0.5)
-                )
-                .help("This database is in the \(subscriptionName) subscription")
+        Group {
+            if kind != .azureEntra {
+                Text("Manual")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.purple)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.purple.opacity(0.15)))
+                    .overlay(Capsule().strokeBorder(Color.purple.opacity(0.4), lineWidth: 0.5))
+                    .help(kind == .manualSqlAuth
+                          ? "Manual SQL authentication (credentials in Keychain)"
+                          : "Manual server with Microsoft Entra ID")
+            } else if isForeignAzure, let name = subscriptionName, !name.isEmpty {
+                Text(name)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Capsule().fill(Color.orange.opacity(0.15)))
+                    .overlay(Capsule().strokeBorder(Color.orange.opacity(0.4), lineWidth: 0.5))
+                    .help("This database is in the \(name) subscription")
+            }
         }
     }
 }

@@ -51,17 +51,33 @@ class UserDataStore: ObservableObject {
     }
 
     func toggleFavorite(databaseName: String, serverFqdn: String, subscriptionId: String, subscriptionName: String) {
-        if let idx = favorites.firstIndex(where: { $0.databaseName == databaseName && $0.serverFqdn == serverFqdn }) {
+        // Backwards-compat shim — Azure-only path.
+        toggleFavorite(descriptor: ConnectionDescriptor(
+            kind: .azureEntra, databaseName: databaseName, serverFqdn: serverFqdn,
+            alias: databaseName, subscriptionId: subscriptionId, subscriptionName: subscriptionName))
+    }
+
+    /// Toggle favorite status using a full descriptor — supports manual connections
+    /// (no subscription) alongside Azure-discovered ones.
+    func toggleFavorite(descriptor d: ConnectionDescriptor) {
+        if let idx = favorites.firstIndex(where: { $0.databaseName == d.databaseName && $0.serverFqdn == d.serverFqdn }) {
             favorites.remove(at: idx)
         } else {
             favorites.append(FavoriteDatabase(
-                databaseName: databaseName, serverFqdn: serverFqdn,
-                subscriptionId: subscriptionId, subscriptionName: subscriptionName))
+                databaseName: d.databaseName, serverFqdn: d.serverFqdn,
+                subscriptionId: d.subscriptionId, subscriptionName: d.subscriptionName,
+                alias: d.alias == d.databaseName ? nil : d.alias,
+                kind: d.kind, port: d.port, username: d.username,
+                keychainRef: d.keychainRef, encrypt: d.encrypt,
+                trustServerCertificate: d.trustServerCertificate))
         }
         save()
     }
 
     func removeFavorite(_ id: UUID) {
+        if let fav = favorites.first(where: { $0.id == id }), let ref = fav.keychainRef {
+            KeychainHelper.deletePassword(ref: ref)
+        }
         favorites.removeAll { $0.id == id }
         save()
     }
@@ -89,19 +105,83 @@ class UserDataStore: ObservableObject {
 
     func addToGroup(groupId: UUID, databaseName: String, serverFqdn: String,
                     subscriptionId: String, subscriptionName: String, alias: String) {
+        // Backwards-compat shim — Azure path.
+        addToGroup(groupId: groupId, descriptor: ConnectionDescriptor(
+            kind: .azureEntra, databaseName: databaseName, serverFqdn: serverFqdn,
+            alias: alias, subscriptionId: subscriptionId, subscriptionName: subscriptionName))
+    }
+
+    /// Add a connection (Azure or manual) to a group using a full descriptor.
+    func addToGroup(groupId: UUID, descriptor d: ConnectionDescriptor) {
         guard let idx = groups.firstIndex(where: { $0.id == groupId }) else { return }
-        // Don't add duplicates
-        if groups[idx].members.contains(where: { $0.databaseName == databaseName && $0.serverFqdn == serverFqdn }) { return }
+        if groups[idx].members.contains(where: { $0.databaseName == d.databaseName && $0.serverFqdn == d.serverFqdn }) { return }
         groups[idx].members.append(GroupMember(
-            databaseName: databaseName, serverFqdn: serverFqdn,
-            subscriptionId: subscriptionId, subscriptionName: subscriptionName, alias: alias))
+            databaseName: d.databaseName, serverFqdn: d.serverFqdn,
+            subscriptionId: d.subscriptionId, subscriptionName: d.subscriptionName,
+            alias: d.alias, kind: d.kind, port: d.port, username: d.username,
+            keychainRef: d.keychainRef, encrypt: d.encrypt,
+            trustServerCertificate: d.trustServerCertificate))
         save()
     }
 
     func removeFromGroup(groupId: UUID, memberId: UUID) {
         guard let idx = groups.firstIndex(where: { $0.id == groupId }) else { return }
+        // Only remove the Keychain entry if no OTHER group/favorite still references
+        // this credential — manual connections may be saved in multiple places.
+        if let member = groups[idx].members.first(where: { $0.id == memberId }),
+           let ref = member.keychainRef,
+           !isKeychainRefInUse(ref, excludingGroupMemberId: memberId) {
+            KeychainHelper.deletePassword(ref: ref)
+        }
         groups[idx].members.removeAll { $0.id == memberId }
         save()
+    }
+
+    private func isKeychainRefInUse(_ ref: String, excludingGroupMemberId: UUID? = nil, excludingFavoriteId: UUID? = nil) -> Bool {
+        for g in groups {
+            for m in g.members where m.keychainRef == ref && m.id != excludingGroupMemberId {
+                return true
+            }
+        }
+        for f in favorites where f.keychainRef == ref && f.id != excludingFavoriteId {
+            return true
+        }
+        return false
+    }
+
+    // MARK: - Subscription normalization (badge bug fix)
+
+    /// Walks every Azure-kind member/favorite and rewrites stale subscriptionId/Name
+    /// using the cross-subscription server lookup. Existing user data was tagged with
+    /// "whichever subscription happened to be selected when the row was added", which
+    /// makes the cross-subscription pill render incorrectly when those don't match.
+    /// Call this whenever `serverToSubscription` changes.
+    func normalizeAzureSubscriptions(using map: [String: AzureSubscription]) {
+        guard !map.isEmpty else { return }
+        var changed = false
+
+        for gIdx in groups.indices {
+            for mIdx in groups[gIdx].members.indices {
+                let m = groups[gIdx].members[mIdx]
+                guard m.kind == .azureEntra, let sub = map[m.serverFqdn] else { continue }
+                if m.subscriptionId != sub.id || m.subscriptionName != sub.name {
+                    groups[gIdx].members[mIdx].subscriptionId = sub.id
+                    groups[gIdx].members[mIdx].subscriptionName = sub.name
+                    changed = true
+                }
+            }
+        }
+        for fIdx in favorites.indices {
+            let f = favorites[fIdx]
+            guard f.kind == .azureEntra, let sub = map[f.serverFqdn] else { continue }
+            if f.subscriptionId != sub.id || f.subscriptionName != sub.name {
+                favorites[fIdx].subscriptionId = sub.id
+                favorites[fIdx].subscriptionName = sub.name
+                changed = true
+            }
+        }
+
+        if changed { save() }
     }
 
     // MARK: - Saved Queries

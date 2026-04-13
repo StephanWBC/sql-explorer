@@ -234,7 +234,12 @@ class AppState: ObservableObject {
         if let node = findExplorerNode(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn) {
             await connectToDatabase(node)
         } else {
-            await connectToForeignDatabase(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn)
+            await connectToForeignDatabase(
+                databaseName: fav.databaseName, serverFqdn: fav.serverFqdn,
+                kind: fav.kind, port: fav.port, username: fav.username,
+                keychainRef: fav.keychainRef,
+                encrypt: fav.encrypt ?? true,
+                trustServerCertificate: fav.trustServerCertificate ?? true)
         }
     }
 
@@ -242,14 +247,26 @@ class AppState: ObservableObject {
         if let node = findExplorerNode(databaseName: member.databaseName, serverFqdn: member.serverFqdn) {
             await connectToDatabase(node)
         } else {
-            await connectToForeignDatabase(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+            await connectToForeignDatabase(
+                databaseName: member.databaseName, serverFqdn: member.serverFqdn,
+                kind: member.kind, port: member.port, username: member.username,
+                keychainRef: member.keychainRef,
+                encrypt: member.encrypt ?? true,
+                trustServerCertificate: member.trustServerCertificate ?? true)
         }
     }
 
     /// Connect to a database that isn't in the currently-selected subscription's Explorer tree.
     /// Builds a synthetic DatabaseObject, stores it in `foreignConnectionNodes`, and loads its schema.
-    /// Used by Groups/Favorites when the member's subscription differs from the active picker.
-    private func connectToForeignDatabase(databaseName: String, serverFqdn: String) async {
+    /// Branches on `kind`:
+    /// - `.azureEntra` / `.manualEntra` → Entra SQL token (requires sign-in)
+    /// - `.manualSqlAuth` → password from Keychain via `keychainRef`
+    private func connectToForeignDatabase(
+        databaseName: String, serverFqdn: String,
+        kind: ConnectionKind = .azureEntra,
+        port: Int? = nil, username: String? = nil, keychainRef: String? = nil,
+        encrypt: Bool = true, trustServerCertificate: Bool = true
+    ) async {
         // Dedup: if we're already tracking a connection for this db+server, noop.
         if let existing = findExplorerNode(databaseName: databaseName, serverFqdn: serverFqdn),
            existing.isConnected {
@@ -259,21 +276,41 @@ class AppState: ObservableObject {
 
         statusMessage = "Connecting to \(databaseName)..."
 
-        guard let sqlToken = await authService.getSQLToken() else {
-            statusMessage = "Failed to get SQL token for \(databaseName)"
-            return
+        let info: ConnectionInfo
+        switch kind {
+        case .azureEntra, .manualEntra:
+            guard let sqlToken = await authService.getSQLToken() else {
+                statusMessage = "Failed to get SQL token for \(databaseName)"
+                return
+            }
+            info = ConnectionInfo(
+                name: "\(databaseName) — \(serverFqdn)",
+                server: serverFqdn,
+                port: port ?? 1433,
+                database: databaseName,
+                authType: .entraIdInteractive,
+                username: authService.userEmail,
+                password: sqlToken,
+                trustServerCertificate: trustServerCertificate,
+                encrypt: encrypt
+            )
+        case .manualSqlAuth:
+            guard let ref = keychainRef, let password = KeychainHelper.loadPassword(ref: ref) else {
+                statusMessage = "Saved password missing for \(databaseName) — re-enter via Edit Connection"
+                return
+            }
+            info = ConnectionInfo(
+                name: "\(databaseName) — \(serverFqdn)",
+                server: serverFqdn,
+                port: port ?? 1433,
+                database: databaseName,
+                authType: .sqlAuthentication,
+                username: username,
+                password: password,
+                trustServerCertificate: trustServerCertificate,
+                encrypt: encrypt
+            )
         }
-
-        let info = ConnectionInfo(
-            name: "\(databaseName) — \(serverFqdn)",
-            server: serverFqdn,
-            database: databaseName,
-            authType: .entraIdInteractive,
-            username: authService.userEmail,
-            password: sqlToken,
-            trustServerCertificate: true,
-            encrypt: true
-        )
 
         let node = DatabaseObject(
             name: databaseName, database: databaseName,
@@ -685,6 +722,84 @@ class AppState: ObservableObject {
             erdSchema?.savedDiagramName = ""
         }
         objectWillChange.send()
+    }
+
+    // MARK: - Manual connection (form / connection string)
+
+    /// Connect to a user-entered SQL Server (form or pasted connection string), and
+    /// optionally persist to Favorites and/or a Group. Manual SQL Auth passwords are
+    /// stashed in the Keychain under a generated `keychainRef` so reconnects can find
+    /// them later. Manual Entra connections piggy-back on the current MSAL session.
+    /// Returns true if the live connection succeeded; only on success is anything
+    /// persisted, so a failed test-connect doesn't pollute the user's saved state.
+    @discardableResult
+    func connectManually(
+        info: ConnectionInfo,
+        saveAsFavorite: Bool,
+        groupId: UUID?,
+        alias: String
+    ) async -> Bool {
+        statusMessage = "Connecting to \(info.server)..."
+
+        // Try the live connection first; bail (without saving) on any failure.
+        let connId: UUID
+        do {
+            connId = try await connectionManager.connect(info)
+        } catch {
+            statusMessage = "Failed: \(error.localizedDescription)"
+            return false
+        }
+
+        // Stash the live node in foreignConnectionNodes so the Explorer's Manual
+        // Connections section + isConnected/findExplorerNode/query-tab plumbing
+        // all work transparently. The node mirrors the per-database row that
+        // azure-discovered connections live as.
+        let node = DatabaseObject(
+            name: info.database, database: info.database,
+            objectType: .database, isExpandable: true)
+        node.serverFqdn = info.server
+        node.connectionId = connId
+        node.isConnected = true
+        foreignConnectionNodes.append(node)
+
+        activeConnectionId = connId
+        currentDatabase = info.database
+        statusMessage = "Connected to \(info.database)"
+
+        await loadSchemaForDatabase(node)
+
+        // Persist (if requested). Only after a successful live connection do we
+        // commit the password to Keychain or write the descriptor.
+        if saveAsFavorite || groupId != nil {
+            let kind: ConnectionKind = info.authType == .entraIdInteractive ? .manualEntra : .manualSqlAuth
+            var ref: String? = nil
+            if kind == .manualSqlAuth, let pwd = info.password, !pwd.isEmpty {
+                let newRef = KeychainHelper.newManualConnectionRef()
+                KeychainHelper.savePassword(ref: newRef, password: pwd)
+                ref = newRef
+            }
+            let descriptor = ConnectionDescriptor(
+                kind: kind,
+                databaseName: info.database,
+                serverFqdn: info.server,
+                alias: alias.isEmpty ? info.database : alias,
+                subscriptionId: nil,
+                subscriptionName: nil,
+                port: info.port == 1433 ? nil : info.port,
+                username: info.username,
+                keychainRef: ref,
+                encrypt: info.encrypt,
+                trustServerCertificate: info.trustServerCertificate
+            )
+            if saveAsFavorite {
+                userDataStore.toggleFavorite(descriptor: descriptor)
+            }
+            if let groupId {
+                userDataStore.addToGroup(groupId: groupId, descriptor: descriptor)
+            }
+        }
+
+        return true
     }
 
     // MARK: - Legacy (manual connections)

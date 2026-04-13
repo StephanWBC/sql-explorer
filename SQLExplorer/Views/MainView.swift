@@ -201,6 +201,13 @@ struct MainView: View {
             guard !newDatabases.isEmpty else { return }
             appState.buildExplorerFromDatabases(newDatabases)
         }
+        .onReceive(appState.authService.$serverToSubscription) { map in
+            // Cross-subscription server map just resolved — rewrite stale member
+            // subscriptionIds so the cross-sub pill renders correctly. (Bug fix:
+            // members were previously tagged with whatever sub was selected at
+            // add-time, not the server's actual sub.)
+            appState.userDataStore.normalizeAzureSubscriptions(using: map)
+        }
         .safeAreaInset(edge: .bottom) {
             StatusBarView()
                 .environmentObject(appState)
@@ -352,6 +359,120 @@ struct MainView: View {
         .cornerRadius(4)
     }
 
+    // MARK: - Manual connections section
+
+    /// Source of a manual-connection row in the Explorer's "Manual Connections"
+    /// section. We stitch together the user's favorites + group members because a
+    /// manual entry might live in either (or both) — connect routing dispatches
+    /// to the right AppState helper based on which object originated the row.
+    private enum ManualSource {
+        case favorite(FavoriteDatabase)
+        case member(GroupMember)
+    }
+
+    private struct ManualRow: Identifiable {
+        let id: String       // "<server>|<db>" — stable dedup key
+        let alias: String
+        let databaseName: String
+        let serverFqdn: String
+        let kind: ConnectionKind
+        let source: ManualSource
+    }
+
+    private var manualConnectionRows: [ManualRow] {
+        var seen: Set<String> = []
+        var rows: [ManualRow] = []
+        for fav in appState.userDataStore.favorites where fav.kind != .azureEntra {
+            let key = "\(fav.serverFqdn)|\(fav.databaseName)"
+            if seen.insert(key).inserted {
+                rows.append(ManualRow(id: key, alias: fav.displayName,
+                                      databaseName: fav.databaseName,
+                                      serverFqdn: fav.serverFqdn, kind: fav.kind,
+                                      source: .favorite(fav)))
+            }
+        }
+        for group in appState.userDataStore.groups {
+            for m in group.members where m.kind != .azureEntra {
+                let key = "\(m.serverFqdn)|\(m.databaseName)"
+                if seen.insert(key).inserted {
+                    rows.append(ManualRow(id: key, alias: m.alias,
+                                          databaseName: m.databaseName,
+                                          serverFqdn: m.serverFqdn, kind: m.kind,
+                                          source: .member(m)))
+                }
+            }
+        }
+        return rows.sorted { $0.alias.lowercased() < $1.alias.lowercased() }
+    }
+
+    @ViewBuilder
+    private func manualRowView(_ row: ManualRow) -> some View {
+        let connected = appState.isConnected(databaseName: row.databaseName, serverFqdn: row.serverFqdn)
+        HStack(spacing: 6) {
+            Circle()
+                .fill(connected ? Color.green : Color.gray.opacity(0.5))
+                .frame(width: 7, height: 7)
+            Image(systemName: "cylinder")
+                .font(.system(size: 11))
+                .foregroundStyle(connected ? .green : .secondary)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 5) {
+                    Text(row.alias)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(connected ? .primary : .secondary)
+                    Text(row.kind == .manualSqlAuth ? "SQL" : "Entra")
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.purple)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Capsule().fill(Color.purple.opacity(0.15)))
+                        .overlay(Capsule().strokeBorder(Color.purple.opacity(0.4), lineWidth: 0.5))
+                }
+                Text("\(row.databaseName)  ·  \(row.serverFqdn)")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            Spacer()
+        }
+        .padding(.vertical, 1)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            if connected {
+                if let node = appState.findConnectedNode(databaseName: row.databaseName, serverFqdn: row.serverFqdn) {
+                    appState.newQueryForDatabase(node)
+                }
+            } else {
+                Task {
+                    switch row.source {
+                    case .favorite(let f): await appState.connectToFavorite(f)
+                    case .member(let m):   await appState.connectToGroupMember(m)
+                    }
+                }
+            }
+        }
+        .contextMenu {
+            if connected {
+                Button {
+                    if let node = appState.findConnectedNode(databaseName: row.databaseName, serverFqdn: row.serverFqdn) {
+                        appState.newQueryForDatabase(node)
+                    }
+                } label: { Label("New Query", systemImage: "plus.rectangle") }
+                Button {
+                    appState.disconnect(databaseName: row.databaseName, serverFqdn: row.serverFqdn)
+                } label: { Label("Disconnect", systemImage: "bolt.slash") }
+            } else {
+                Button {
+                    Task {
+                        switch row.source {
+                        case .favorite(let f): await appState.connectToFavorite(f)
+                        case .member(let m):   await appState.connectToGroupMember(m)
+                        }
+                    }
+                } label: { Label("Connect", systemImage: "bolt.fill") }
+            }
+        }
+    }
+
     /// All currently connected database nodes
     private var connectedDatabases: [DatabaseObject] {
         appState.explorerNodes.flatMap { server in
@@ -407,18 +528,39 @@ struct MainView: View {
 
     private var explorerContent: some View {
         Group {
-            if appState.explorerNodes.isEmpty {
-                VStack(spacing: 8) {
+            if appState.explorerNodes.isEmpty && manualConnectionRows.isEmpty {
+                VStack(spacing: 10) {
                     Spacer()
                     Image(systemName: "cylinder")
-                        .font(.system(size: 28))
+                        .font(.system(size: 32))
                         .foregroundStyle(.quaternary)
-                    Text("No databases")
-                        .font(.caption)
+                    if !appState.authService.isSignedIn {
+                        Text("No databases yet")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        Text("Sign in to browse Azure SQL, or click")
+                            .font(.system(size: 11))
+                            .foregroundStyle(.tertiary)
+                        HStack(spacing: 4) {
+                            Image(systemName: "plus")
+                                .font(.system(size: 9))
+                            Text("New")
+                                .font(.system(size: 11, weight: .medium))
+                            Text("at the top to add a manual connection")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.tertiary)
+                        }
                         .foregroundStyle(.secondary)
+                    } else {
+                        Text("No databases")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 16)
             } else if isFilterActive {
                 // Flat filtered list — avoids NSOutlineView crash from dynamic tree changes
                 List {
@@ -480,6 +622,22 @@ struct MainView: View {
                             Text("CONNECTED")
                                 .font(.system(size: 9, weight: .semibold))
                                 .foregroundStyle(.green)
+                                .tracking(1)
+                        }
+                    }
+
+                    // Saved manual connections (form/connection-string entries).
+                    // Distinct from Azure-discovered databases — clicking connects
+                    // using stored Keychain credentials (or current Entra token).
+                    if !manualConnectionRows.isEmpty {
+                        Section {
+                            ForEach(manualConnectionRows) { row in
+                                manualRowView(row)
+                            }
+                        } header: {
+                            Text("MANUAL CONNECTIONS")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.purple)
                                 .tracking(1)
                         }
                     }

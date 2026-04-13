@@ -1,323 +1,535 @@
 import SwiftUI
 
+/// Unified "New Connection" sheet. Three tabs:
+/// - **Azure SQL** – picks from the user's discovered Azure databases (requires sign-in)
+/// - **SQL Server (Form)** – host/port/db/user/pass + Encrypt/TrustServerCertificate
+/// - **From Connection String** – paste a SqlClient-style string, parse, edit
+///
+/// All three modes share a footer where the user can mark the connection as a
+/// favorite and/or drop it into a group. Manual entries store passwords in the
+/// Keychain so they reconnect on relaunch.
 struct ConnectionSheet: View {
+    enum Mode: String, CaseIterable, Identifiable {
+        case azure = "Azure SQL"
+        case form = "Form"
+        case string = "Connection String"
+        var id: String { rawValue }
+        var icon: String {
+            switch self {
+            case .azure: return "cloud"
+            case .form: return "square.grid.2x2"
+            case .string: return "doc.plaintext"
+            }
+        }
+    }
+
     @EnvironmentObject var appState: AppState
     @ObservedObject var authService: AuthService
     @Environment(\.dismiss) var dismiss
 
+    var initialMode: Mode = .azure
+
+    @State private var mode: Mode = .azure
+
+    // Azure selection
     @State private var selectedDatabase: AzureDatabase?
-    @State private var connectionName = ""
-    @State private var selectedGroup: ConnectionGroup?
-    @State private var environmentLabel: EnvironmentLabel?
-    @State private var customEnvironment = ""
-    @State private var trustCert = true
-    @State private var encrypt = true
-    @State private var saveConnection = true
 
-    @State private var isConnecting = false
-    @State private var statusMessage = ""
-    @State private var isError = false
-
-    // Group editing
-    @State private var isCreatingGroup = false
-    @State private var newGroupName = ""
-
-    // Manual server entry (for SQL Auth fallback)
-    @State private var manualMode = false
+    // Manual form fields
     @State private var server = ""
     @State private var port = "1433"
     @State private var database = "master"
     @State private var username = ""
     @State private var password = ""
+    @State private var trustCert = true
+    @State private var encrypt = true
+    @State private var useEntraForManual = false  // .manualEntra vs .manualSqlAuth
+
+    // Connection string
+    @State private var connectionString = ""
+    @State private var stringParseError: String?
+
+    // Common
+    @State private var alias = ""
+    @State private var saveToFavorites = false
+    @State private var selectedGroupId: UUID?
+    @State private var newGroupName = ""
+    @State private var isCreatingGroup = false
+
+    @State private var isConnecting = false
+    @State private var statusMessage = ""
+    @State private var isError = false
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
-            HStack {
-                Image(systemName: "cylinder.split.1x2")
-                    .font(.title2)
-                    .foregroundStyle(.blue)
-                VStack(alignment: .leading) {
-                    Text("Connect to Database")
-                        .font(.headline)
-                    if authService.isSignedIn {
-                        Text(authService.userEmail)
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                    } else {
-                        Text("Sign in from the sidebar first")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    }
-                }
-                Spacer()
-
-                // Toggle manual mode
-                Toggle("Manual", isOn: $manualMode)
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    .help("Switch to manual server entry")
-            }
-            .padding()
-
+            header
+            Divider()
+            modePicker
             Divider()
 
-            Form {
-                if manualMode {
-                    // Manual SQL Auth
-                    Section("Server") {
-                        TextField("Server", text: $server, prompt: Text("myserver.database.windows.net"))
-                        TextField("Port", text: $port)
-                        TextField("Database", text: $database, prompt: Text("master"))
-                        TextField("Username", text: $username)
-                        SecureField("Password", text: $password)
-                    }
-                } else if !authService.isSignedIn {
-                    // Not signed in — prompt
-                    Section {
-                        VStack(spacing: 12) {
-                            Image(systemName: "person.badge.key")
-                                .font(.system(size: 32))
-                                .foregroundStyle(.secondary)
-                            Text("Sign in to discover your Azure SQL databases")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                            Text("Use the Sign In button in the sidebar")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 20)
-                    }
-                } else {
-                    // Signed in — show subscription + database picker
-                    Section("Subscription") {
-                        Picker("Subscription", selection: Binding(
-                            get: { authService.selectedSubscription },
-                            set: { sub in
-                                authService.selectedSubscription = sub
-                                if let sub {
-                                    Task {
-                                        await authService.discoverDatabases(
-                                            subscriptionId: sub.id, subscriptionName: sub.name)
-                                    }
-                                }
-                            }
-                        )) {
-                            ForEach(authService.subscriptions) { sub in
-                                Text(sub.name).tag(sub as AzureSubscription?)
-                            }
-                        }
-
-                        if authService.isLoadingSubscriptions {
-                            ProgressView("Loading subscriptions...")
-                                .font(.caption)
-                        }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    switch mode {
+                    case .azure:  azureForm
+                    case .form:   manualForm
+                    case .string: connectionStringForm
                     }
 
-                    Section("Database") {
-                        if authService.isLoadingDatabases {
-                            ProgressView("Discovering databases...")
-                                .font(.caption)
-                        } else if authService.databases.isEmpty {
-                            Text("No databases found in this subscription")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Picker("Database", selection: $selectedDatabase) {
-                                Text("Select a database").tag(nil as AzureDatabase?)
-                                ForEach(authService.databases) { db in
-                                    Text("\(db.databaseName)  ·  \(db.serverFqdn.replacingOccurrences(of: ".database.windows.net", with: ""))")
-                                        .tag(db as AzureDatabase?)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                        }
-                    }
+                    Divider().padding(.vertical, 4)
+
+                    saveSection
                 }
-
-                // Group
-                Section("Group") {
-                    HStack {
-                        Picker("Group", selection: $selectedGroup) {
-                            Text("No group").tag(nil as ConnectionGroup?)
-                            ForEach(appState.connectionStore.groups) { group in
-                                Text(group.name).tag(group as ConnectionGroup?)
-                            }
-                        }
-                        Button(action: {
-                            newGroupName = ""
-                            isCreatingGroup = true
-                        }) {
-                            Image(systemName: "plus")
-                        }
-                    }
-                }
-
-                if isCreatingGroup {
-                    Section("New Group") {
-                        TextField("Enter group name", text: $newGroupName)
-                            .textFieldStyle(.roundedBorder)
-                        HStack {
-                            Spacer()
-                            Button("Cancel") {
-                                isCreatingGroup = false
-                                newGroupName = ""
-                            }
-                            Button("Create") {
-                                guard !newGroupName.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-                                let group = ConnectionGroup(name: newGroupName.trimmingCharacters(in: .whitespaces))
-                                appState.connectionStore.saveGroup(group)
-                                selectedGroup = group
-                                isCreatingGroup = false
-                                newGroupName = ""
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(newGroupName.trimmingCharacters(in: .whitespaces).isEmpty)
-                        }
-                    }
-                }
-
-                // Environment
-                Section("Environment") {
-                    Picker("Environment", selection: $environmentLabel) {
-                        Text("None").tag(nil as EnvironmentLabel?)
-                        ForEach(EnvironmentLabel.allCases.filter { $0 != .custom }) { env in
-                            HStack {
-                                Circle().fill(env.color).frame(width: 8, height: 8)
-                                Text(env.rawValue)
-                            }
-                            .tag(env as EnvironmentLabel?)
-                        }
-                        Text("Custom").tag(EnvironmentLabel.custom as EnvironmentLabel?)
-                    }
-
-                    if environmentLabel == .custom {
-                        TextField("Custom environment", text: $customEnvironment)
-                    }
-                }
-
-                // Options
-                Section("Options") {
-                    TextField("Connection Name (optional)", text: $connectionName,
-                             prompt: Text("e.g. BLMS Prod, Auth Dev"))
-                    Toggle("Trust Server Certificate", isOn: $trustCert)
-                    Toggle("Encrypt", isOn: $encrypt)
-                    Toggle("Save Connection", isOn: $saveConnection)
-                }
+                .padding(16)
             }
-            .formStyle(.grouped)
 
             Divider()
-
-            // Status + buttons
-            VStack(spacing: 8) {
-                if !statusMessage.isEmpty {
-                    HStack {
-                        Image(systemName: isError ? "xmark.circle.fill" : "checkmark.circle.fill")
-                            .foregroundStyle(isError ? .red : .green)
-                        Text(statusMessage)
-                            .font(.caption)
-                        Spacer()
-                    }
-                    .padding(.horizontal)
-                }
-
-                HStack {
-                    Spacer()
-                    Button("Cancel") { dismiss() }
-                        .keyboardShortcut(.cancelAction)
-                    Button("Connect") {
-                        Task { await connect() }
-                    }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(isConnecting || (!manualMode && selectedDatabase == nil && authService.isSignedIn))
-                }
-                .padding()
-            }
+            footer
         }
-        .frame(width: 520, height: 680)
+        .frame(width: 540, height: 700)
+        .onAppear {
+            mode = initialMode
+        }
     }
 
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "cylinder.split.1x2")
+                .font(.title2)
+                .foregroundStyle(.blue)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("New Connection")
+                    .font(.headline)
+                if authService.isSignedIn {
+                    Text(authService.userEmail)
+                        .font(.caption)
+                        .foregroundStyle(.green)
+                } else {
+                    Text("Not signed in to Microsoft — manual connections still work")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            Spacer()
+        }
+        .padding(14)
+    }
+
+    private var modePicker: some View {
+        Picker("", selection: $mode) {
+            ForEach(Mode.allCases) { m in
+                Label(m.rawValue, systemImage: m.icon).tag(m)
+            }
+        }
+        .pickerStyle(.segmented)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+    }
+
+    // MARK: - Azure tab
+
+    @ViewBuilder
+    private var azureForm: some View {
+        if !authService.isSignedIn {
+            VStack(spacing: 10) {
+                Image(systemName: "person.badge.key")
+                    .font(.system(size: 32))
+                    .foregroundStyle(.secondary)
+                Text("Sign in to discover Azure SQL databases")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                Button {
+                    Task { await authService.signIn() }
+                } label: {
+                    Label("Sign in with Microsoft", systemImage: "person.badge.key")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 18)
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                labeledRow("Subscription") {
+                    Picker("", selection: Binding(
+                        get: { authService.selectedSubscription },
+                        set: { sub in
+                            authService.selectedSubscription = sub
+                            if let sub {
+                                Task {
+                                    await authService.discoverDatabases(
+                                        subscriptionId: sub.id, subscriptionName: sub.name)
+                                }
+                            }
+                        }
+                    )) {
+                        ForEach(authService.subscriptions) { sub in
+                            Text(sub.name).tag(sub as AzureSubscription?)
+                        }
+                    }
+                    .labelsHidden()
+                }
+
+                labeledRow("Database") {
+                    if authService.isLoadingDatabases {
+                        ProgressView().controlSize(.small)
+                    } else if authService.databases.isEmpty {
+                        Text("No databases in this subscription")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Picker("", selection: $selectedDatabase) {
+                            Text("Select a database").tag(nil as AzureDatabase?)
+                            ForEach(authService.databases) { db in
+                                Text("\(db.databaseName)  ·  \(db.serverFqdn.replacingOccurrences(of: ".database.windows.net", with: ""))")
+                                    .tag(db as AzureDatabase?)
+                            }
+                        }
+                        .labelsHidden()
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Manual form tab
+
+    private var manualForm: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            labeledRow("Server") {
+                TextField("myserver.example.com or 10.0.0.5", text: $server)
+                    .textFieldStyle(.roundedBorder)
+            }
+            HStack(spacing: 10) {
+                labeledRow("Port", width: 80) {
+                    TextField("1433", text: $port)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 90)
+                }
+                labeledRow("Database") {
+                    TextField("master", text: $database)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            Toggle("Use Microsoft Entra ID (current sign-in)", isOn: $useEntraForManual)
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .disabled(!authService.isSignedIn)
+                .help(authService.isSignedIn
+                      ? "Authenticate to this server using your current Entra ID session"
+                      : "Sign in with Microsoft first to use this option")
+
+            if !useEntraForManual {
+                labeledRow("Username") {
+                    TextField("sa", text: $username)
+                        .textFieldStyle(.roundedBorder)
+                }
+                labeledRow("Password") {
+                    SecureField("", text: $password)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            Toggle("Encrypt", isOn: $encrypt)
+                .toggleStyle(.switch).controlSize(.small)
+            Toggle("Trust Server Certificate", isOn: $trustCert)
+                .toggleStyle(.switch).controlSize(.small)
+        }
+    }
+
+    // MARK: - Connection string tab
+
+    private var connectionStringForm: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Paste a SqlClient-style connection string. Fields populate the form on parse.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            TextEditor(text: $connectionString)
+                .font(.system(size: 12, design: .monospaced))
+                .frame(minHeight: 120)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 5)
+                        .strokeBorder(Color.secondary.opacity(0.3), lineWidth: 0.5)
+                )
+
+            HStack {
+                Button {
+                    parseConnectionString()
+                } label: {
+                    Label("Parse", systemImage: "wand.and.stars")
+                }
+                .controlSize(.small)
+                Spacer()
+                if let err = stringParseError {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+
+            // Live preview of what was parsed (read-only summary)
+            if !server.isEmpty || !database.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Parsed values")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                    summaryRow("Server", server)
+                    summaryRow("Port", port)
+                    summaryRow("Database", database)
+                    if !username.isEmpty { summaryRow("Username", username) }
+                    summaryRow("Encrypt", encrypt ? "yes" : "no")
+                    summaryRow("Trust Cert", trustCert ? "yes" : "no")
+                }
+                .padding(8)
+                .background(Color.secondary.opacity(0.06))
+                .cornerRadius(5)
+            }
+        }
+    }
+
+    // MARK: - Save section
+
+    private var saveSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            labeledRow("Alias (optional)") {
+                TextField(defaultAliasPlaceholder, text: $alias)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            Toggle("Add to Favorites", isOn: $saveToFavorites)
+                .toggleStyle(.switch).controlSize(.small)
+
+            HStack(spacing: 6) {
+                Text("Group")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 110, alignment: .leading)
+                Picker("", selection: $selectedGroupId) {
+                    Text("None").tag(nil as UUID?)
+                    ForEach(appState.userDataStore.groups) { g in
+                        Text(g.name).tag(g.id as UUID?)
+                    }
+                }
+                .labelsHidden()
+                Button {
+                    isCreatingGroup.toggle()
+                    newGroupName = ""
+                } label: { Image(systemName: "plus") }
+                    .buttonStyle(.borderless)
+                    .controlSize(.small)
+            }
+
+            if isCreatingGroup {
+                HStack {
+                    TextField("New group name", text: $newGroupName)
+                        .textFieldStyle(.roundedBorder)
+                    Button("Create") {
+                        let name = newGroupName.trimmingCharacters(in: .whitespaces)
+                        guard !name.isEmpty else { return }
+                        let g = appState.userDataStore.addGroup(name: name)
+                        selectedGroupId = g.id
+                        isCreatingGroup = false
+                        newGroupName = ""
+                    }
+                    .controlSize(.small)
+                    .disabled(newGroupName.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+
+    // MARK: - Footer
+
+    private var footer: some View {
+        VStack(spacing: 6) {
+            if !statusMessage.isEmpty {
+                HStack {
+                    Image(systemName: isError ? "xmark.circle.fill" : "checkmark.circle.fill")
+                        .foregroundStyle(isError ? .red : .green)
+                    Text(statusMessage).font(.caption)
+                    Spacer()
+                }
+                .padding(.horizontal, 14)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button {
+                    Task { await connect() }
+                } label: {
+                    if isConnecting {
+                        ProgressView().controlSize(.small).padding(.horizontal, 6)
+                    } else {
+                        Text("Connect")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(isConnecting || !canConnect)
+            }
+            .padding(14)
+        }
+    }
+
+    // MARK: - Connect dispatch
+
+    private var canConnect: Bool {
+        switch mode {
+        case .azure: return selectedDatabase != nil
+        case .form, .string: return !server.trimmingCharacters(in: .whitespaces).isEmpty
+                                  && !database.trimmingCharacters(in: .whitespaces).isEmpty
+        }
+    }
+
+    private var defaultAliasPlaceholder: String {
+        switch mode {
+        case .azure: return selectedDatabase?.databaseName ?? "e.g. BLMS Prod"
+        case .form, .string: return database.isEmpty ? "e.g. Local SQL" : database
+        }
+    }
+
+    private func parseConnectionString() {
+        do {
+            let info = try ConnectionStringParser.parse(connectionString)
+            server = info.server
+            port = String(info.port)
+            database = info.database
+            username = info.username ?? ""
+            password = info.password ?? ""
+            encrypt = info.encrypt
+            trustCert = info.trustServerCertificate
+            useEntraForManual = info.authType == .entraIdInteractive
+            stringParseError = nil
+        } catch {
+            stringParseError = error.localizedDescription
+        }
+    }
+
+    @MainActor
     private func connect() async {
         isConnecting = true
+        defer { isConnecting = false }
         statusMessage = "Connecting..."
         isError = false
 
-        let serverName: String
-        let dbName: String
-        let connUsername: String?
-        let connPassword: String?
+        switch mode {
+        case .azure:
+            await connectAzure()
+        case .form, .string:
+            await connectManualOrString()
+        }
+    }
 
-        if manualMode {
-            serverName = server
-            dbName = database
-            connUsername = username
-            connPassword = password
-        } else if let db = selectedDatabase {
-            serverName = db.serverFqdn
-            dbName = db.databaseName
-            // For Entra ID, get a SQL access token and pass as password
-            if let sqlToken = await authService.getSQLToken() {
-                connUsername = authService.userEmail
-                connPassword = sqlToken
-            } else {
-                statusMessage = "Failed to get SQL access token"
+    private func connectAzure() async {
+        guard let db = selectedDatabase else { return }
+        // Reuse the existing Explorer connect path so the connection ends up as a
+        // first-class node (rather than a synthetic foreign one).
+        if let node = appState.explorerNodes
+            .flatMap({ $0.children })
+            .first(where: { $0.name == db.databaseName && $0.serverFqdn == db.serverFqdn }) {
+            await appState.connectToDatabase(node)
+        } else {
+            // Fall through to foreign path (cross-subscription)
+            await appState.connectToFavorite(FavoriteDatabase(
+                databaseName: db.databaseName, serverFqdn: db.serverFqdn,
+                subscriptionId: db.subscriptionId, subscriptionName: db.subscriptionName))
+        }
+
+        // Persist if requested. For Azure, subscription is known.
+        let resolvedAlias = alias.trimmingCharacters(in: .whitespaces).isEmpty ? db.databaseName : alias
+        let descriptor = ConnectionDescriptor(
+            kind: .azureEntra,
+            databaseName: db.databaseName, serverFqdn: db.serverFqdn,
+            alias: resolvedAlias,
+            subscriptionId: db.subscriptionId, subscriptionName: db.subscriptionName)
+        if saveToFavorites {
+            appState.userDataStore.toggleFavorite(descriptor: descriptor)
+        }
+        if let groupId = selectedGroupId {
+            appState.userDataStore.addToGroup(groupId: groupId, descriptor: descriptor)
+        }
+        dismiss()
+    }
+
+    private func connectManualOrString() async {
+        let portInt = Int(port.trimmingCharacters(in: .whitespaces)) ?? 1433
+        let trimmedServer = server.trimmingCharacters(in: .whitespaces)
+        let trimmedDb = database.trimmingCharacters(in: .whitespaces)
+        let resolvedAlias = alias.trimmingCharacters(in: .whitespaces).isEmpty ? trimmedDb : alias
+
+        let info: ConnectionInfo
+        if useEntraForManual {
+            // Entra ID against a user-specified server. Token is fetched inside
+            // connectManually's token path so we don't need it here.
+            info = ConnectionInfo(
+                name: "\(trimmedDb) — \(trimmedServer)",
+                server: trimmedServer, port: portInt, database: trimmedDb,
+                authType: .entraIdInteractive,
+                username: authService.userEmail,
+                password: nil, // filled in by connectManually using a fresh token
+                trustServerCertificate: trustCert, encrypt: encrypt)
+        } else {
+            info = ConnectionInfo(
+                name: "\(trimmedDb) — \(trimmedServer)",
+                server: trimmedServer, port: portInt, database: trimmedDb,
+                authType: .sqlAuthentication,
+                username: username,
+                password: password,
+                trustServerCertificate: trustCert, encrypt: encrypt)
+        }
+
+        // For Entra-on-manual we need a token now (connectManually doesn't fetch).
+        var infoToConnect = info
+        if useEntraForManual {
+            guard let token = await authService.getSQLToken() else {
+                statusMessage = "Failed to get SQL token"
                 isError = true
-                isConnecting = false
                 return
             }
-        } else {
-            statusMessage = "Select a database first"
-            isError = true
-            isConnecting = false
-            return
+            infoToConnect.password = token
         }
 
-        let displayName = connectionName.isEmpty ? "\(dbName)  —  \(serverName)" : connectionName
-
-        let info = ConnectionInfo(
-            name: displayName,
-            server: serverName,
-            port: manualMode ? (Int(port) ?? 1433) : 1433,
-            database: dbName,
-            authType: manualMode ? .sqlAuthentication : .entraIdInteractive,
-            username: connUsername,
-            password: connPassword,
-            trustServerCertificate: trustCert,
-            encrypt: encrypt
+        let success = await appState.connectManually(
+            info: infoToConnect,
+            saveAsFavorite: saveToFavorites,
+            groupId: selectedGroupId,
+            alias: resolvedAlias
         )
-
-        do {
-            let connId = try await appState.connectionManager.connect(info)
-            appState.activeConnectionId = connId
-            appState.currentDatabase = dbName
-            appState.statusMessage = "Connected to \(serverName)"
-
-            if saveConnection {
-                let envLabel = environmentLabel == .custom ? customEnvironment : environmentLabel?.rawValue
-                let saved = SavedConnection(
-                    id: info.id, name: displayName, server: serverName,
-                    port: info.port, database: dbName, authType: info.authType,
-                    username: info.username, groupId: selectedGroup?.id,
-                    environmentLabel: envLabel
-                )
-                appState.connectionStore.saveConnection(saved)
-            }
-
-            let envLabel = environmentLabel == .custom ? customEnvironment : environmentLabel?.rawValue
-            appState.addServerToExplorer(
-                name: displayName,
-                connectionId: connId,
-                groupId: selectedGroup?.id,
-                environmentLabel: envLabel
-            )
+        if success {
             dismiss()
-        } catch {
-            statusMessage = "Error: \(error.localizedDescription)"
+        } else {
+            statusMessage = appState.statusMessage
             isError = true
         }
-        isConnecting = false
+    }
+
+    // MARK: - Layout helpers
+
+    @ViewBuilder
+    private func labeledRow<Content: View>(_ label: String, width: CGFloat = 110, @ViewBuilder content: () -> Content) -> some View {
+        HStack(alignment: .center, spacing: 6) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: width, alignment: .leading)
+            content()
+        }
+    }
+
+    private func summaryRow(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 80, alignment: .leading)
+            Text(value)
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
     }
 }

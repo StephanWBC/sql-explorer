@@ -200,12 +200,24 @@ struct ObjectExplorerRow: View {
         return userDataStore.isFavorite(databaseName: node.name, serverFqdn: fqdn)
     }
 
+    /// Resolve the subscription a server actually belongs to. Prefer the cross-sub
+    /// lookup (which knows about every subscription the user has access to); fall
+    /// back to the active picker only if the lookup hasn't loaded yet. This is the
+    /// add-time half of the badge fix — without it, every member gets tagged with
+    /// the active subscription regardless of where its server actually lives.
+    private func resolveSubscription(for fqdn: String) -> AzureSubscription? {
+        appState.authService.subscription(forServerFqdn: fqdn)
+            ?? appState.authService.selectedSubscription
+    }
+
     private func toggleFavorite() {
         guard let fqdn = node.serverFqdn ?? findServerFqdn() else { return }
-        let sub = appState.authService.selectedSubscription
-        userDataStore.toggleFavorite(
+        let sub = resolveSubscription(for: fqdn)
+        userDataStore.toggleFavorite(descriptor: ConnectionDescriptor(
+            kind: .azureEntra,
             databaseName: node.name, serverFqdn: fqdn,
-            subscriptionId: sub?.id ?? "", subscriptionName: sub?.name ?? "")
+            alias: node.name,
+            subscriptionId: sub?.id, subscriptionName: sub?.name))
     }
 
     private func addToGroup(_ group: DatabaseGroup) {
@@ -214,12 +226,13 @@ struct ObjectExplorerRow: View {
 
     private func addToGroupWithAlias(groupId: UUID, alias: String) {
         guard let fqdn = node.serverFqdn ?? findServerFqdn() else { return }
-        let sub = appState.authService.selectedSubscription
+        let sub = resolveSubscription(for: fqdn)
         let finalAlias = alias.trimmingCharacters(in: .whitespaces).isEmpty ? node.name : alias.trimmingCharacters(in: .whitespaces)
-        userDataStore.addToGroup(
-            groupId: groupId, databaseName: node.name, serverFqdn: fqdn,
-            subscriptionId: sub?.id ?? "", subscriptionName: sub?.name ?? "",
-            alias: finalAlias)
+        userDataStore.addToGroup(groupId: groupId, descriptor: ConnectionDescriptor(
+            kind: .azureEntra,
+            databaseName: node.name, serverFqdn: fqdn,
+            alias: finalAlias,
+            subscriptionId: sub?.id, subscriptionName: sub?.name))
     }
 
     private func findServerFqdn() -> String? {

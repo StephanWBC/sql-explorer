@@ -47,4 +47,24 @@ struct KeychainHelper {
         ]
         SecItemDelete(query as CFDictionary)
     }
+
+    // MARK: - Manual connection passwords
+
+    /// Generate a stable, unique Keychain key for a manual SQL Auth connection.
+    /// Format: `manual-conn-<uuid>`. Persisted as `keychainRef` on the Group/Favorite row.
+    static func newManualConnectionRef() -> String {
+        "manual-conn-\(UUID().uuidString)"
+    }
+
+    static func savePassword(ref: String, password: String) {
+        save(key: ref, value: password)
+    }
+
+    static func loadPassword(ref: String) -> String? {
+        load(key: ref)
+    }
+
+    static func deletePassword(ref: String) {
+        delete(key: ref)
+    }
 }

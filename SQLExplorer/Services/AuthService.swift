@@ -14,6 +14,14 @@ class AuthService: ObservableObject {
     @Published var isLoadingDatabases: Bool = false
     @Published var selectedSubscription: AzureSubscription?
 
+    /// Cross-subscription FQDN → subscription map. Populated in the background after
+    /// sign-in by `discoverAllSubscriptionDatabases()`. Lets us resolve which Azure
+    /// subscription a given server belongs to, regardless of which is currently
+    /// selected in the picker. This is what powers the cross-subscription pill in
+    /// Groups/Favorites — without it, members get tagged with whichever subscription
+    /// happened to be active at add-time.
+    @Published var serverToSubscription: [String: AzureSubscription] = [:]
+
     private var application: MSALPublicClientApplication?
     private var account: MSALAccount?
     private var armAccessToken: String?
@@ -141,7 +149,18 @@ class AuthService: ObservableObject {
         subscriptions = []
         databases = []
         selectedSubscription = nil
+        serverToSubscription = [:]
         errorMessage = nil
+    }
+
+    // MARK: - Cross-subscription server lookup
+
+    /// Returns the subscription this server lives in, or `nil` if the cross-subscription
+    /// map hasn't loaded yet (or the server isn't in any of the user's subscriptions).
+    /// Use this at add-to-Group/Favorites time so badges work even when the user is
+    /// looking at a different subscription's tree.
+    func subscription(forServerFqdn fqdn: String) -> AzureSubscription? {
+        serverToSubscription[fqdn]
     }
 
     // MARK: - SQL Token
@@ -236,9 +255,46 @@ class AuthService: ObservableObject {
                 selectedSubscription = selected
                 await discoverDatabases(subscriptionId: selected.id, subscriptionName: selected.name)
             }
+
+            // Fan out a non-blocking discovery across every subscription so we can
+            // resolve which sub a given server lives in — without forcing the user
+            // to switch the picker. Powers cross-subscription pills + the badge fix
+            // for already-saved Group/Favorite members.
+            Task { [weak self] in await self?.discoverAllSubscriptionDatabases() }
         } catch {
             errorMessage = "Subscriptions: \(error.localizedDescription)"
         }
+    }
+
+    /// Walks every subscription the user has access to, lists its SQL servers, and
+    /// builds a `serverFqdn → AzureSubscription` lookup. Runs once after sign-in.
+    /// Failures on individual subscriptions are non-fatal — they just won't appear
+    /// in the map (and any saved members on those servers won't get badges).
+    func discoverAllSubscriptionDatabases() async {
+        guard let token = armAccessToken else { return }
+        var map: [String: AzureSubscription] = [:]
+
+        for sub in subscriptions {
+            do {
+                var serversReq = URLRequest(url: URL(string: "https://management.azure.com/subscriptions/\(sub.id)/providers/Microsoft.Sql/servers?api-version=2021-11-01")!)
+                serversReq.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                serversReq.timeoutInterval = 30
+                let (data, _) = try await URLSession.shared.data(for: serversReq)
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                guard let servers = json?["value"] as? [[String: Any]] else { continue }
+
+                for server in servers {
+                    if let props = server["properties"] as? [String: Any],
+                       let fqdn = props["fullyQualifiedDomainName"] as? String {
+                        map[fqdn] = sub
+                    }
+                }
+            } catch {
+                AppLogger.auth.warning("Cross-sub server enum failed for \(sub.name): \(error.localizedDescription)")
+            }
+        }
+
+        serverToSubscription = map
     }
 
     func discoverDatabases(subscriptionId: String, subscriptionName: String) async {
