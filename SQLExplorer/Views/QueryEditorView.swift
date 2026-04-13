@@ -298,6 +298,7 @@ private enum SQLHighlighter {
     static let multiCommentRegex = try! NSRegularExpression(pattern: "/\\*[\\s\\S]*?\\*/")
     static let numberRegex = try! NSRegularExpression(pattern: "\\b\\d+(\\.\\d+)?\\b")
 
+    @MainActor
     static func highlight(_ textView: NSTextView) {
         guard let storage = textView.textStorage, let layoutManager = textView.layoutManager,
               let textContainer = textView.textContainer else { return }
