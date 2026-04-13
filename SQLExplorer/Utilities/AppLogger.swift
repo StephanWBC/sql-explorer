@@ -7,4 +7,5 @@ enum AppLogger {
     static let query      = Logger(subsystem: subsystem, category: "query")
     static let auth       = Logger(subsystem: subsystem, category: "auth")
     static let schema     = Logger(subsystem: subsystem, category: "schema")
+    static let metrics    = Logger(subsystem: subsystem, category: "metrics")
 }

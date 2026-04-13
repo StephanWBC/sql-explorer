@@ -19,6 +19,13 @@ struct SQLExplorerApp: App {
                 .frame(minWidth: 600, minHeight: 400)
         }
         .defaultSize(width: 1200, height: 800)
+
+        Window("Performance", id: "performance") {
+            PerformanceView()
+                .environmentObject(appState)
+                .frame(minWidth: 700, minHeight: 500)
+        }
+        .defaultSize(width: 1100, height: 700)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("New Query Tab") {

@@ -169,6 +169,35 @@ class AuthService: ObservableObject {
         }
     }
 
+    // MARK: - ARM Token
+
+    /// Get a fresh ARM token. Tries silent acquisition first, falls back to interactive auth.
+    /// Updates the cached `armAccessToken` on success.
+    func getARMToken() async -> String? {
+        guard let app = application, let account else { return nil }
+
+        do {
+            let params = MSALSilentTokenParameters(scopes: Self.armScopes, account: account)
+            let result = try await app.acquireTokenSilent(with: params)
+            armAccessToken = result.accessToken
+            return result.accessToken
+        } catch {
+            AppLogger.auth.warning("Silent ARM token failed, falling back to interactive: \(error.localizedDescription)")
+        }
+
+        do {
+            let webviewParams = MSALWebviewParameters()
+            webviewParams.webviewType = .wkWebView
+            let params = MSALInteractiveTokenParameters(scopes: Self.armScopes, webviewParameters: webviewParams)
+            let result = try await app.acquireToken(with: params)
+            armAccessToken = result.accessToken
+            return result.accessToken
+        } catch {
+            errorMessage = "ARM token failed. Please sign out and sign in again."
+            return nil
+        }
+    }
+
     // MARK: - Default Subscription
 
     func saveDefaultSubscriptionId(_ id: String) {

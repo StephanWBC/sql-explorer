@@ -17,6 +17,7 @@ class AppState: ObservableObject {
     @Published var explorerNodes: [DatabaseObject] = []
     @Published var revealedNodeId: UUID?  // Set this to scroll to + expand a node
     @Published var erdSchema: ERDSchema?
+    @Published var performanceContext: AzureDatabase?
     @Published var queryTabs: [QueryTab] = []
     @Published var selectedTabId: UUID?
 
@@ -418,6 +419,21 @@ class AppState: ObservableObject {
         } catch {
             statusMessage = "Failed to load columns: \(error.localizedDescription)"
         }
+    }
+
+    // MARK: - Performance Monitor
+
+    /// Resolves the connected DB to an AzureDatabase (via discovered subscriptions) and stashes
+    /// it for the Performance window to pick up. Returns true if a match was found.
+    @discardableResult
+    func openPerformanceMonitor(for db: DatabaseObject) -> Bool {
+        guard let fqdn = db.serverFqdn,
+              let azureDb = authService.databases.first(where: {
+                  $0.databaseName == db.name && $0.serverFqdn == fqdn
+              })
+        else { return false }
+        performanceContext = azureDb
+        return true
     }
 
     // MARK: - Database Diagram (ERD)

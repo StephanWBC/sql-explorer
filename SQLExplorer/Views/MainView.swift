@@ -271,6 +271,17 @@ struct MainView: View {
             } label: {
                 Label("Database Diagram", systemImage: "rectangle.connected.to.line.below")
             }
+
+            Button {
+                if appState.openPerformanceMonitor(for: db) {
+                    openWindow(id: "performance")
+                }
+            } label: {
+                Label("Performance", systemImage: "chart.line.uptrend.xyaxis")
+            }
+            .disabled(db.serverFqdn == nil || !appState.authService.databases.contains(where: {
+                $0.databaseName == db.name && $0.serverFqdn == db.serverFqdn
+            }))
         }
         .onTapGesture(count: 2) {
             appState.newQueryForDatabase(db)

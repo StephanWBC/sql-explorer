@@ -1,0 +1,216 @@
+import SwiftUI
+
+@MainActor
+final class PerformanceViewModel: ObservableObject {
+    @Published var series: [MetricSeries] = []
+    @Published var isLoading: Bool = false
+    @Published var permissionDenied: Bool = false
+    @Published var errorMessage: String?
+    @Published var selectedTimeRange: MetricTimeRange = .last1h
+    @Published var autoRefresh: Bool = false
+
+    private var loadedDbId: AzureDatabase.ID?
+
+    /// Full load: ARM token → permission probe → fetch metrics.
+    func load(db: AzureDatabase, authService: AuthService) async {
+        isLoading = true
+        permissionDenied = false
+        errorMessage = nil
+        defer { isLoading = false }
+
+        guard let token = await authService.getARMToken() else {
+            errorMessage = "Could not acquire Azure access token. Sign in again."
+            return
+        }
+
+        let resourceId = AzureMetricsService.resourceId(for: db)
+        let allowed = await AzureMetricsService.probePermission(resourceId: resourceId, token: token)
+        guard allowed else {
+            permissionDenied = true
+            return
+        }
+
+        do {
+            series = try await AzureMetricsService.fetchMetrics(
+                resourceId: resourceId, token: token, timeRange: selectedTimeRange)
+            loadedDbId = db.id
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    /// Lighter refresh: skips the permission probe (only call after a successful `load`).
+    func refresh(db: AzureDatabase, authService: AuthService) async {
+        guard !isLoading else { return }
+        // If db changed, do a full load instead.
+        if loadedDbId != db.id {
+            await load(db: db, authService: authService)
+            return
+        }
+        guard let token = await authService.getARMToken() else { return }
+        let resourceId = AzureMetricsService.resourceId(for: db)
+        do {
+            let fresh = try await AzureMetricsService.fetchMetrics(
+                resourceId: resourceId, token: token, timeRange: selectedTimeRange)
+            series = fresh
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+}
+
+struct PerformanceView: View {
+    @EnvironmentObject var appState: AppState
+    @StateObject private var viewModel = PerformanceViewModel()
+    @State private var refreshTick: Int = 0
+
+    private let columns = [GridItem(.adaptive(minimum: 360), spacing: 12)]
+    private let autoRefreshTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            Divider()
+            content
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .task(id: appState.performanceContext?.id) {
+            guard let db = appState.performanceContext else { return }
+            await viewModel.load(db: db, authService: appState.authService)
+        }
+        .onChange(of: viewModel.selectedTimeRange) { _, _ in
+            Task {
+                guard let db = appState.performanceContext else { return }
+                await viewModel.refresh(db: db, authService: appState.authService)
+            }
+        }
+        .onReceive(autoRefreshTimer) { _ in
+            guard viewModel.autoRefresh, let db = appState.performanceContext else { return }
+            Task { await viewModel.refresh(db: db, authService: appState.authService) }
+        }
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                if let db = appState.performanceContext {
+                    Text(db.databaseName)
+                        .font(.system(size: 14, weight: .semibold))
+                    Text(db.serverFqdn)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Performance")
+                        .font(.system(size: 14, weight: .semibold))
+                }
+            }
+
+            Spacer()
+
+            Picker("Time range", selection: $viewModel.selectedTimeRange) {
+                ForEach(MetricTimeRange.allCases) { r in
+                    Text(r.rawValue).tag(r)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .frame(maxWidth: 160)
+
+            Toggle(isOn: $viewModel.autoRefresh) {
+                Text("Auto")
+                    .font(.system(size: 11))
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            .help("Refresh every 60 seconds")
+
+            Button {
+                Task {
+                    guard let db = appState.performanceContext else { return }
+                    await viewModel.refresh(db: db, authService: appState.authService)
+                }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(viewModel.isLoading || appState.performanceContext == nil)
+            .help("Refresh now")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
+    // MARK: - Content
+
+    @ViewBuilder
+    private var content: some View {
+        if appState.performanceContext == nil {
+            centeredMessage(
+                icon: "chart.line.uptrend.xyaxis",
+                title: "No database selected",
+                detail: "Open this window from a connected Azure SQL Database in the Object Explorer."
+            )
+        } else if viewModel.isLoading && viewModel.series.isEmpty {
+            VStack(spacing: 12) {
+                ProgressView()
+                Text("Loading metrics…")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if viewModel.permissionDenied {
+            centeredMessage(
+                icon: "lock.shield",
+                title: "Permission required",
+                detail: "Your Azure account doesn't have access to read metrics for this database.\n\nRequired role: Monitoring Reader (or any role granting Microsoft.Insights/metrics/read on the database resource)."
+            )
+        } else if let err = viewModel.errorMessage, viewModel.series.isEmpty {
+            centeredMessage(icon: "exclamationmark.triangle", title: "Couldn't load metrics", detail: err)
+        } else if viewModel.series.isEmpty {
+            centeredMessage(
+                icon: "chart.bar",
+                title: "No metric data",
+                detail: "Azure Monitor returned no points for the selected time range."
+            )
+        } else {
+            ScrollView {
+                LazyVGrid(columns: columns, spacing: 12) {
+                    ForEach(viewModel.series) { s in
+                        MetricChartView(series: s)
+                    }
+                }
+                .padding(14)
+            }
+            .overlay(alignment: .topTrailing) {
+                if viewModel.isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                        .padding(8)
+                }
+            }
+        }
+    }
+
+    private func centeredMessage(icon: String, title: String, detail: String) -> some View {
+        VStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 36))
+                .foregroundStyle(.tertiary)
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+            Text(detail)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 480)
+        }
+        .padding(40)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
