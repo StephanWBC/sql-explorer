@@ -59,6 +59,40 @@ class AuthService: ObservableObject {
         }
     }
 
+    // MARK: - MSAL async wrappers
+    //
+    // MSAL's `async` methods take a non-Sendable `MSALPublicClientApplication`, which
+    // trips Swift 6's "sending 'app' risks causing data races" diagnostic when called
+    // from this @MainActor class. Wrapping the callback-based APIs in a checked
+    // continuation sidesteps the isolation check — MSAL's completion is invoked on a
+    // dispatch queue, not across an async suspension boundary.
+
+    private func acquireTokenSilent(
+        app: MSALPublicClientApplication,
+        params: MSALSilentTokenParameters
+    ) async throws -> MSALResult {
+        try await withCheckedThrowingContinuation { cont in
+            app.acquireTokenSilent(with: params) { result, error in
+                if let error { cont.resume(throwing: error) }
+                else if let result { cont.resume(returning: result) }
+                else { cont.resume(throwing: NSError(domain: "MSAL", code: -1)) }
+            }
+        }
+    }
+
+    private func acquireToken(
+        app: MSALPublicClientApplication,
+        params: MSALInteractiveTokenParameters
+    ) async throws -> MSALResult {
+        try await withCheckedThrowingContinuation { cont in
+            app.acquireToken(with: params) { result, error in
+                if let error { cont.resume(throwing: error) }
+                else if let result { cont.resume(returning: result) }
+                else { cont.resume(throwing: NSError(domain: "MSAL", code: -1)) }
+            }
+        }
+    }
+
     // MARK: - Session Restore
 
     func tryRestoreSession() async {
@@ -71,7 +105,7 @@ class AuthService: ObservableObject {
 
             self.account = acct
             let params = MSALSilentTokenParameters(scopes: Self.armScopes, account: acct)
-            let result = try await app.acquireTokenSilent(with: params)
+            let result = try await acquireTokenSilent(app: app, params: params)
 
             armAccessToken = result.accessToken
             userEmail = acct.username ?? "Signed in"
@@ -129,7 +163,7 @@ class AuthService: ObservableObject {
         webviewParams.webviewType = .wkWebView
         let params = MSALInteractiveTokenParameters(scopes: Self.armScopes, webviewParameters: webviewParams)
         params.promptType = .selectAccount
-        return try await app.acquireToken(with: params)
+        return try await acquireToken(app: app, params: params)
     }
 
     /// Clears all MSAL cached accounts to recover from Keychain errors (e.g. after reinstall)
@@ -178,7 +212,7 @@ class AuthService: ObservableObject {
         // Try silent token first (uses cached refresh token — no user interaction)
         do {
             let params = MSALSilentTokenParameters(scopes: Self.sqlScopes, account: account)
-            return try await app.acquireTokenSilent(with: params).accessToken
+            return try await acquireTokenSilent(app: app, params: params).accessToken
         } catch {
             AppLogger.auth.warning("Silent SQL token failed, falling back to interactive: \(error.localizedDescription)")
         }
@@ -188,7 +222,7 @@ class AuthService: ObservableObject {
             let webviewParams = MSALWebviewParameters()
             webviewParams.webviewType = .wkWebView
             let params = MSALInteractiveTokenParameters(scopes: Self.sqlScopes, webviewParameters: webviewParams)
-            return try await app.acquireToken(with: params).accessToken
+            return try await acquireToken(app: app, params: params).accessToken
         } catch {
             errorMessage = "SQL token failed. Please sign out and sign in again."
             return nil
@@ -219,7 +253,7 @@ class AuthService: ObservableObject {
 
         do {
             let params = MSALSilentTokenParameters(scopes: Self.armScopes, account: account)
-            let result = try await app.acquireTokenSilent(with: params)
+            let result = try await acquireTokenSilent(app: app, params: params)
             armAccessToken = result.accessToken
             return result.accessToken
         } catch {
@@ -230,7 +264,7 @@ class AuthService: ObservableObject {
             let webviewParams = MSALWebviewParameters()
             webviewParams.webviewType = .wkWebView
             let params = MSALInteractiveTokenParameters(scopes: Self.armScopes, webviewParameters: webviewParams)
-            let result = try await app.acquireToken(with: params)
+            let result = try await acquireToken(app: app, params: params)
             armAccessToken = result.accessToken
             return result.accessToken
         } catch {
