@@ -190,9 +190,17 @@ struct FlowLayoutView<Item, Content: View>: View {
         .frame(height: totalHeight)
     }
 
+    /// Reference-typed box so the @Sendable alignmentGuide closures can mutate
+    /// shared layout state without tripping Swift 6 concurrency diagnostics.
+    private final class LayoutState: @unchecked Sendable {
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
     private func generateContent(in geometry: GeometryProxy) -> some View {
-        var width = CGFloat.zero
-        var height = CGFloat.zero
+        let state = LayoutState()
+        let lastIndex = items.count - 1          // Sendable snapshot — avoids capturing self.items
+        let maxWidth = geometry.size.width       // Sendable snapshot — avoids capturing GeometryProxy
 
         return ZStack(alignment: .topLeading) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
@@ -200,22 +208,22 @@ struct FlowLayoutView<Item, Content: View>: View {
                     .padding(.trailing, 4)
                     .padding(.bottom, 4)
                     .alignmentGuide(.leading) { d in
-                        if abs(width - d.width) > geometry.size.width {
-                            width = 0
-                            height -= d.height + 4
+                        if abs(state.width - d.width) > maxWidth {
+                            state.width = 0
+                            state.height -= d.height + 4
                         }
-                        let result = width
-                        if index == items.count - 1 {
-                            width = 0
+                        let result = state.width
+                        if index == lastIndex {
+                            state.width = 0
                         } else {
-                            width -= d.width
+                            state.width -= d.width
                         }
                         return result
                     }
                     .alignmentGuide(.top) { _ in
-                        let result = height
-                        if index == items.count - 1 {
-                            height = 0
+                        let result = state.height
+                        if index == lastIndex {
+                            state.height = 0
                         }
                         return result
                     }
