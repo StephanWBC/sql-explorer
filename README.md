@@ -67,6 +67,21 @@ successes/failures, firewall blocks) with:
 
 Download the latest `.dmg` from [**Releases**](https://github.com/StephanWBC/sql-explorer/releases/latest), open it, and drag **SQL Explorer** to your Applications folder.
 
+### First launch — macOS Gatekeeper
+
+On first launch macOS may show **"SQL Explorer is damaged and can't be opened."**
+The app is fine — macOS is blocking the quarantine attribute your browser
+attached to the download.
+
+Open Terminal and run this single command:
+
+```bash
+sudo xattr -cr "/Applications/SQL Explorer.app"
+```
+
+Enter your password when prompted, then open the app. Run the same command
+again after every update.
+
 ## Requirements
 
 - macOS 14.0 (Sonoma) or later
