@@ -85,9 +85,32 @@ struct PerformanceView: View {
     @EnvironmentObject var appState: AppState
     @StateObject private var viewModel = PerformanceViewModel()
     @State private var refreshTick: Int = 0
+    @State private var expandedMetric: String?
+    @AppStorage("performance.pinnedMetrics") private var pinnedRaw: String = ""
 
     private let columns = [GridItem(.adaptive(minimum: 360), spacing: 12)]
     private let autoRefreshTimer = Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+
+    private var pinned: Set<String> {
+        Set(pinnedRaw.split(separator: ",").map(String.init).filter { !$0.isEmpty })
+    }
+
+    private func togglePin(_ name: String) {
+        var set = pinned
+        if set.contains(name) { set.remove(name) } else { set.insert(name) }
+        pinnedRaw = set.sorted().joined(separator: ",")
+    }
+
+    /// Pinned metrics first (preserving backend order inside each group).
+    private var orderedSeries: [MetricSeries] {
+        let pins = pinned
+        return viewModel.series.sorted { a, b in
+            let ap = pins.contains(a.metricName)
+            let bp = pins.contains(b.metricName)
+            if ap != bp { return ap && !bp }
+            return false
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -202,8 +225,14 @@ struct PerformanceView: View {
         } else {
             ScrollView {
                 LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(viewModel.series) { s in
-                        MetricChartView(series: s)
+                    ForEach(orderedSeries) { s in
+                        MetricChartView(
+                            series: s,
+                            isExpanded: false,
+                            onExpand: { expandedMetric = s.metricName },
+                            onPinToggle: { togglePin(s.metricName) },
+                            isPinned: pinned.contains(s.metricName)
+                        )
                     }
                 }
                 .padding(14)
@@ -215,7 +244,18 @@ struct PerformanceView: View {
                         .padding(8)
                 }
             }
+            .sheet(item: Binding(
+                get: { expandedMetric.flatMap { name in viewModel.series.first { $0.metricName == name } }.map { ExpandedMetric(series: $0) } },
+                set: { expandedMetric = $0?.series.metricName }
+            )) { expanded in
+                ExpandedMetricSheet(series: expanded.series) { expandedMetric = nil }
+            }
         }
+    }
+
+    private struct ExpandedMetric: Identifiable {
+        let series: MetricSeries
+        var id: String { series.metricName }
     }
 
     private func centeredMessage(icon: String, title: String, detail: String) -> some View {
@@ -233,5 +273,72 @@ struct PerformanceView: View {
         }
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Expanded metric sheet
+
+/// Full-size focused view of a single metric with CSV export. Reuses `MetricChartView`
+/// (same rendering, same hover ruler, just a taller chart and extra toolbar actions).
+private struct ExpandedMetricSheet: View {
+    let series: MetricSeries
+    let onClose: () -> Void
+
+    @State private var exportError: String?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(series.displayName)
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Button {
+                    exportCSV()
+                } label: {
+                    Label("Export CSV", systemImage: "square.and.arrow.down")
+                }
+                .controlSize(.small)
+                Button("Done", action: onClose)
+                    .keyboardShortcut(.cancelAction)
+                    .controlSize(.small)
+            }
+            .padding(14)
+            Divider()
+
+            ScrollView {
+                MetricChartView(series: series, isExpanded: true)
+                    .padding(14)
+            }
+        }
+        .frame(minWidth: 780, idealWidth: 960, minHeight: 520, idealHeight: 620)
+        .alert("Export failed", isPresented: Binding(
+            get: { exportError != nil },
+            set: { if !$0 { exportError = nil } }
+        )) {
+            Button("OK", role: .cancel) { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
+        }
+    }
+
+    private func exportCSV() {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(series.metricName).csv"
+        panel.allowedContentTypes = [.commaSeparatedText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let fmt = ISO8601DateFormatter()
+            fmt.formatOptions = [.withInternetDateTime]
+            var lines = ["timestamp,average,total,maximum"]
+            for p in series.dataPoints {
+                let a = p.average.map { String($0) } ?? ""
+                let t = p.total.map   { String($0) } ?? ""
+                let m = p.maximum.map { String($0) } ?? ""
+                lines.append("\(fmt.string(from: p.timestamp)),\(a),\(t),\(m)")
+            }
+            try lines.joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
+        } catch {
+            exportError = error.localizedDescription
+        }
     }
 }

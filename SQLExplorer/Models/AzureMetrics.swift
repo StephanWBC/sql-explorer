@@ -60,4 +60,40 @@ struct MetricSeries: Identifiable {
     var latestValue: Double? {
         dataPoints.reversed().first { $0.primaryValue != nil }?.primaryValue
     }
+
+    /// First non-nil data point in the series (used for trend delta).
+    var firstValue: Double? {
+        dataPoints.first { $0.primaryValue != nil }?.primaryValue
+    }
+
+    /// All non-nil values in the series.
+    var values: [Double] {
+        dataPoints.compactMap { $0.primaryValue }
+    }
+
+    var minValue: Double? { values.min() }
+    var maxValue: Double? { values.max() }
+    var avgValue: Double? {
+        let v = values
+        guard !v.isEmpty else { return nil }
+        return v.reduce(0, +) / Double(v.count)
+    }
+
+    /// 95th percentile (nearest-rank).
+    var p95Value: Double? {
+        let sorted = values.sorted()
+        guard !sorted.isEmpty else { return nil }
+        let rank = Int((0.95 * Double(sorted.count)).rounded(.up)) - 1
+        return sorted[max(0, min(sorted.count - 1, rank))]
+    }
+
+    /// Data point with the maximum primary value (useful for debugging spikes).
+    var peakPoint: MetricDataPoint? {
+        dataPoints
+            .compactMap { p -> (MetricDataPoint, Double)? in
+                guard let v = p.primaryValue else { return nil }
+                return (p, v)
+            }
+            .max(by: { $0.1 < $1.1 })?.0
+    }
 }
