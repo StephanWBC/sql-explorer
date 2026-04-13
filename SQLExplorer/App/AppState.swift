@@ -15,6 +15,14 @@ class AppState: ObservableObject {
     @Published var currentDatabase: String = ""
 
     @Published var explorerNodes: [DatabaseObject] = []
+
+    /// Connections to databases that live outside the currently-selected subscription.
+    /// Populated when the user connects to a Group/Favorite member whose subscription
+    /// differs from the active picker selection, or when a connected database falls
+    /// out of the Explorer tree on subscription switch. Lookups via `findExplorerNode`
+    /// transparently search here after checking `explorerNodes`.
+    @Published var foreignConnectionNodes: [DatabaseObject] = []
+
     @Published var revealedNodeId: UUID?  // Set this to scroll to + expand a node
     @Published var erdSchema: ERDSchema?
     @Published var performanceContext: AzureDatabase?
@@ -51,17 +59,27 @@ class AppState: ObservableObject {
     // MARK: - Build Explorer Tree
 
     func buildExplorerFromDatabases(_ databases: [AzureDatabase]) {
-        // Preserve existing connection state when rebuilding
-        var connectedDbs: [String: (UUID, Bool)] = [:]  // key -> (connectionId, isLoaded)
-        for node in allDatabaseNodes() {
-            if node.isConnected, let connId = node.connectionId, let fqdn = node.serverFqdn {
-                connectedDbs["\(node.name)@\(fqdn)"] = (connId, node.isLoaded)
+        // Collect all currently-connected databases across the old tree AND foreign store,
+        // keyed by "name@fqdn". These need their connection state preserved; nodes that
+        // don't match the new subscription's database list get moved to foreignConnectionNodes.
+        var connectedNodesByKey: [String: DatabaseObject] = [:]
+        for server in explorerNodes {
+            for db in server.children where db.objectType == .database {
+                if db.isConnected, let fqdn = db.serverFqdn {
+                    connectedNodesByKey["\(db.name)@\(fqdn)"] = db
+                }
+            }
+        }
+        for db in foreignConnectionNodes {
+            if db.isConnected, let fqdn = db.serverFqdn {
+                connectedNodesByKey["\(db.name)@\(fqdn)"] = db
             }
         }
 
         explorerNodes.removeAll()
 
         let grouped = Dictionary(grouping: databases, by: { $0.serverFqdn })
+        var reclaimedKeys: Set<String> = []
 
         for (serverFqdn, dbs) in grouped.sorted(by: { $0.key < $1.key }) {
             let shortName = serverFqdn.replacingOccurrences(of: ".database.windows.net", with: "")
@@ -70,24 +88,33 @@ class AppState: ObservableObject {
             serverNode.isLoaded = true
 
             for db in dbs.sorted(by: { $0.databaseName < $1.databaseName }) {
-                let dbNode = DatabaseObject(
-                    name: db.databaseName, database: db.databaseName,
-                    objectType: .database, isExpandable: false)
-                dbNode.serverFqdn = db.serverFqdn
-
-                // Restore connection state if previously connected
                 let key = "\(db.databaseName)@\(db.serverFqdn)"
-                if let (connId, _) = connectedDbs[key] {
-                    dbNode.connectionId = connId
-                    dbNode.isConnected = true
-                    dbNode.isExpandable = true
-                }
 
-                serverNode.children.append(dbNode)
+                // Reuse the existing connected node when possible — preserves loaded schema,
+                // children, expansion state, etc. Otherwise create a fresh disconnected node.
+                if let existing = connectedNodesByKey[key] {
+                    serverNode.children.append(existing)
+                    reclaimedKeys.insert(key)
+                } else {
+                    let dbNode = DatabaseObject(
+                        name: db.databaseName, database: db.databaseName,
+                        objectType: .database, isExpandable: false)
+                    dbNode.serverFqdn = db.serverFqdn
+                    serverNode.children.append(dbNode)
+                }
             }
 
             explorerNodes.append(serverNode)
         }
+
+        // Any connected node not in the new subscription's database list becomes "foreign".
+        // This includes nodes already in foreignConnectionNodes (preserved) and nodes that
+        // were previously in the tree but have now been orphaned by the subscription switch.
+        var newForeign: [DatabaseObject] = []
+        for (key, node) in connectedNodesByKey where !reclaimedKeys.contains(key) {
+            newForeign.append(node)
+        }
+        foreignConnectionNodes = newForeign
 
         statusMessage = "\(databases.count) database(s) across \(grouped.count) server(s)"
     }
@@ -157,6 +184,12 @@ class AppState: ObservableObject {
         node.isExpandable = false
         node.isLoaded = false
         node.connectionId = nil
+
+        // Foreign nodes only exist to hold the live connection state for a Group/Favorite
+        // member. Once disconnected, the durable representation is the member row itself —
+        // drop the foreign entry so it doesn't linger as a zombie.
+        foreignConnectionNodes.removeAll { $0.id == node.id }
+
         objectWillChange.send()
 
         statusMessage = "Disconnected from \(node.name)"
@@ -198,21 +231,73 @@ class AppState: ObservableObject {
     // MARK: - Connect from Favorites / Groups (ALWAYS uses real explorer nodes)
 
     func connectToFavorite(_ fav: FavoriteDatabase) async {
-        let node = findExplorerNode(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn)
-        guard let node else {
-            statusMessage = "Database not found in current subscription. Switch subscription first."
-            return
+        if let node = findExplorerNode(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn) {
+            await connectToDatabase(node)
+        } else {
+            await connectToForeignDatabase(databaseName: fav.databaseName, serverFqdn: fav.serverFqdn)
         }
-        await connectToDatabase(node)
     }
 
     func connectToGroupMember(_ member: GroupMember) async {
-        let node = findExplorerNode(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
-        guard let node else {
-            statusMessage = "Database not found in current subscription. Switch subscription first."
+        if let node = findExplorerNode(databaseName: member.databaseName, serverFqdn: member.serverFqdn) {
+            await connectToDatabase(node)
+        } else {
+            await connectToForeignDatabase(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+        }
+    }
+
+    /// Connect to a database that isn't in the currently-selected subscription's Explorer tree.
+    /// Builds a synthetic DatabaseObject, stores it in `foreignConnectionNodes`, and loads its schema.
+    /// Used by Groups/Favorites when the member's subscription differs from the active picker.
+    private func connectToForeignDatabase(databaseName: String, serverFqdn: String) async {
+        // Dedup: if we're already tracking a connection for this db+server, noop.
+        if let existing = findExplorerNode(databaseName: databaseName, serverFqdn: serverFqdn),
+           existing.isConnected {
+            statusMessage = "\(databaseName) is already connected"
             return
         }
-        await connectToDatabase(node)
+
+        statusMessage = "Connecting to \(databaseName)..."
+
+        guard let sqlToken = await authService.getSQLToken() else {
+            statusMessage = "Failed to get SQL token for \(databaseName)"
+            return
+        }
+
+        let info = ConnectionInfo(
+            name: "\(databaseName) — \(serverFqdn)",
+            server: serverFqdn,
+            database: databaseName,
+            authType: .entraIdInteractive,
+            username: authService.userEmail,
+            password: sqlToken,
+            trustServerCertificate: true,
+            encrypt: true
+        )
+
+        let node = DatabaseObject(
+            name: databaseName, database: databaseName,
+            objectType: .database, isExpandable: false)
+        node.serverFqdn = serverFqdn
+        node.isConnecting = true
+        foreignConnectionNodes.append(node)
+
+        do {
+            let connId = try await connectionManager.connect(info)
+            node.connectionId = connId
+            node.isConnected = true
+            node.isExpandable = true
+            activeConnectionId = connId
+            currentDatabase = databaseName
+            statusMessage = "Connected to \(databaseName)"
+
+            await loadSchemaForDatabase(node)
+        } catch {
+            statusMessage = "Failed: \(error.localizedDescription)"
+            foreignConnectionNodes.removeAll { $0.id == node.id }
+        }
+
+        node.isConnecting = false
     }
 
     func newQueryForFavorite(_ fav: FavoriteDatabase) {
@@ -268,7 +353,9 @@ class AppState: ObservableObject {
                 return db
             }
         }
-        return nil
+        return foreignConnectionNodes.first {
+            $0.name == databaseName && $0.serverFqdn == serverFqdn
+        }
     }
 
     private func findServerFqdn(for node: DatabaseObject) -> String? {
@@ -282,6 +369,7 @@ class AppState: ObservableObject {
 
     private func allDatabaseNodes() -> [DatabaseObject] {
         explorerNodes.flatMap { $0.children.filter { $0.objectType == .database } }
+            + foreignConnectionNodes
     }
 
     // MARK: - Schema Loading

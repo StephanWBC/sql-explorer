@@ -200,18 +200,41 @@ struct GroupsView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.green)
             VStack(alignment: .leading, spacing: 1) {
-                Text(member.alias)
-                    .font(.system(size: 12, weight: .medium))
+                HStack(spacing: 5) {
+                    Text(member.alias)
+                        .font(.system(size: 12, weight: .medium))
+                    SubscriptionPill(member: member, appState: appState)
+                }
                 Text("\(member.databaseName)  ·  \(member.shortServer)")
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
             }
             Spacer()
+            favoriteStarButton(member)
         }
         .contextMenu { memberContextMenu(member, group: group, connected: true) }
         .onTapGesture(count: 2) {
             appState.newQueryForGroupMember(member)
         }
+    }
+
+    // MARK: - Favorite star (inline)
+
+    @ViewBuilder
+    private func favoriteStarButton(_ member: GroupMember) -> some View {
+        let isFav = appState.userDataStore.isFavorite(
+            databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+        Button {
+            appState.userDataStore.toggleFavorite(
+                databaseName: member.databaseName, serverFqdn: member.serverFqdn,
+                subscriptionId: member.subscriptionId, subscriptionName: member.subscriptionName)
+        } label: {
+            Image(systemName: isFav ? "star.fill" : "star")
+                .font(.system(size: 10))
+                .foregroundStyle(isFav ? .yellow : .gray.opacity(0.3))
+        }
+        .buttonStyle(.plain)
+        .help(isFav ? "Remove from favorites" : "Add to favorites")
     }
 
     // MARK: - Schema tree row
@@ -246,6 +269,16 @@ struct GroupsView: View {
                 Label("New Query", systemImage: "plus.rectangle")
             }
 
+            Button {
+                if let node = appState.findConnectedNode(
+                    databaseName: member.databaseName, serverFqdn: member.serverFqdn) {
+                    node.isLoaded = false
+                    Task { await appState.loadSchemaForDatabase(node) }
+                }
+            } label: {
+                Label("Refresh Schema", systemImage: "arrow.clockwise")
+            }
+
             if let connId = appState.connectionId(databaseName: member.databaseName, serverFqdn: member.serverFqdn) {
                 Button {
                     Task { await appState.openERDPicker(databaseName: member.databaseName, connectionId: connId) }
@@ -267,6 +300,36 @@ struct GroupsView: View {
                 Task { await appState.connectToGroupMember(member) }
             } label: {
                 Label("Connect", systemImage: "bolt.fill")
+            }
+        }
+
+        Divider()
+
+        // Favorite toggle (parity with Object Explorer)
+        let isFav = appState.userDataStore.isFavorite(
+            databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+        Button {
+            appState.userDataStore.toggleFavorite(
+                databaseName: member.databaseName, serverFqdn: member.serverFqdn,
+                subscriptionId: member.subscriptionId, subscriptionName: member.subscriptionName)
+        } label: {
+            Label(isFav ? "Remove from Favorites" : "Add to Favorites",
+                  systemImage: isFav ? "star.slash" : "star.fill")
+        }
+
+        // Add to another group
+        let otherGroups = appState.userDataStore.groups.filter { $0.id != group.id }
+        if !otherGroups.isEmpty {
+            Menu("Add to Group") {
+                ForEach(otherGroups) { g in
+                    Button(g.name) {
+                        appState.userDataStore.addToGroup(
+                            groupId: g.id,
+                            databaseName: member.databaseName, serverFqdn: member.serverFqdn,
+                            subscriptionId: member.subscriptionId, subscriptionName: member.subscriptionName,
+                            alias: member.alias)
+                    }
+                }
             }
         }
 
@@ -317,6 +380,11 @@ struct GroupMemberRow: View {
         appState.isConnected(databaseName: member.databaseName, serverFqdn: member.serverFqdn)
     }
 
+    private var isFavorite: Bool {
+        appState.userDataStore.isFavorite(
+            databaseName: member.databaseName, serverFqdn: member.serverFqdn)
+    }
+
     var body: some View {
         HStack(spacing: 6) {
             Circle()
@@ -328,14 +396,84 @@ struct GroupMemberRow: View {
                 .foregroundStyle(connected ? .green : .secondary)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(member.alias)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(connected ? .primary : .secondary)
+                HStack(spacing: 5) {
+                    Text(member.alias)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(connected ? .primary : .secondary)
+                    SubscriptionPill(member: member, appState: appState)
+                }
                 Text("\(member.databaseName)  ·  \(member.shortServer)")
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
             }
+
+            Spacer()
+
+            Button {
+                appState.userDataStore.toggleFavorite(
+                    databaseName: member.databaseName, serverFqdn: member.serverFqdn,
+                    subscriptionId: member.subscriptionId, subscriptionName: member.subscriptionName)
+            } label: {
+                Image(systemName: isFavorite ? "star.fill" : "star")
+                    .font(.system(size: 10))
+                    .foregroundStyle(isFavorite ? .yellow : .gray.opacity(0.3))
+            }
+            .buttonStyle(.plain)
+            .help(isFavorite ? "Remove from favorites" : "Add to favorites")
         }
         .padding(.vertical, 1)
+    }
+}
+
+/// Small pill shown beside a Group/Favorite member's alias when the member lives
+/// in a different Azure subscription than the one currently selected in the picker.
+/// Helps distinguish cross-subscription entries (e.g. Production on a separate sub).
+struct SubscriptionPill: View {
+    let subscriptionId: String
+    let subscriptionName: String
+    @ObservedObject var appState: AppState
+
+    init(subscriptionId: String, subscriptionName: String, appState: AppState) {
+        self.subscriptionId = subscriptionId
+        self.subscriptionName = subscriptionName
+        self.appState = appState
+    }
+
+    init(member: GroupMember, appState: AppState) {
+        self.init(
+            subscriptionId: member.subscriptionId,
+            subscriptionName: member.subscriptionName,
+            appState: appState)
+    }
+
+    init(favorite: FavoriteDatabase, appState: AppState) {
+        self.init(
+            subscriptionId: favorite.subscriptionId,
+            subscriptionName: favorite.subscriptionName,
+            appState: appState)
+    }
+
+    private var isForeign: Bool {
+        guard let active = appState.authService.selectedSubscription else { return false }
+        return !subscriptionId.isEmpty && subscriptionId != active.id
+    }
+
+    var body: some View {
+        if isForeign && !subscriptionName.isEmpty {
+            Text(subscriptionName)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.orange)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(
+                    Capsule()
+                        .fill(Color.orange.opacity(0.15))
+                )
+                .overlay(
+                    Capsule()
+                        .strokeBorder(Color.orange.opacity(0.4), lineWidth: 0.5)
+                )
+                .help("This database is in the \(subscriptionName) subscription")
+        }
     }
 }

@@ -105,8 +105,11 @@ struct FavoritesView: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.green)
             VStack(alignment: .leading, spacing: 1) {
-                Text(fav.displayName)
-                    .font(.system(size: 12, weight: .medium))
+                HStack(spacing: 5) {
+                    Text(fav.displayName)
+                        .font(.system(size: 12, weight: .medium))
+                    SubscriptionPill(favorite: fav, appState: appState)
+                }
                 Text(fav.shortServer)
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
@@ -243,9 +246,12 @@ struct FavoriteRow: View {
                 .foregroundStyle(.yellow)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(favorite.displayName)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(connected ? .primary : .secondary)
+                HStack(spacing: 5) {
+                    Text(favorite.displayName)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(connected ? .primary : .secondary)
+                    SubscriptionPill(favorite: favorite, appState: appState)
+                }
                 Text("\(favorite.shortServer)  ·  \(favorite.subscriptionName)")
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
