@@ -195,6 +195,21 @@ class AuthService: ObservableObject {
         }
     }
 
+    // MARK: - Sign-in coordination
+
+    /// Returns true if the user is signed in by the time this returns.
+    /// - If already signed in, returns immediately.
+    /// - Otherwise triggers the full interactive sign-in (Microsoft webview, 2FA,
+    ///   subscription discovery), then resolves once it completes.
+    /// Use this from any flow that needs Entra credentials so the user gets a single,
+    /// expected prompt instead of the call silently failing.
+    @discardableResult
+    func ensureSignedIn() async -> Bool {
+        if isSignedIn { return true }
+        await signIn()
+        return isSignedIn
+    }
+
     // MARK: - ARM Token
 
     /// Get a fresh ARM token. Tries silent acquisition first, falls back to interactive auth.

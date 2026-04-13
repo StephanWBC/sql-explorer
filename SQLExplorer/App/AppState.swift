@@ -279,6 +279,18 @@ class AppState: ObservableObject {
         let info: ConnectionInfo
         switch kind {
         case .azureEntra, .manualEntra:
+            // Saved member needs an Entra SQL token. If the user isn't signed in,
+            // run the full interactive sign-in (Microsoft webview + 2FA) inline,
+            // then continue — no silent failure, no need to hop to the sidebar.
+            if !authService.isSignedIn {
+                statusMessage = "Sign-in required for \(databaseName) — opening Microsoft sign-in…"
+                let signedIn = await authService.ensureSignedIn()
+                if !signedIn {
+                    statusMessage = "Sign-in cancelled — \(databaseName) needs Microsoft authentication"
+                    return
+                }
+                statusMessage = "Connecting to \(databaseName)…"
+            }
             guard let sqlToken = await authService.getSQLToken() else {
                 statusMessage = "Failed to get SQL token for \(databaseName)"
                 return
