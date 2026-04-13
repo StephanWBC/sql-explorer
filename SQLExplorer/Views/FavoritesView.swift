@@ -163,6 +163,18 @@ struct FavoritesView: View {
                 }
             }
 
+            if let node = appState.findConnectedNode(
+                databaseName: fav.databaseName, serverFqdn: fav.serverFqdn) {
+                Button {
+                    if appState.openPerformanceMonitor(for: node) {
+                        openWindow(id: "performance")
+                    }
+                } label: {
+                    Label("Performance", systemImage: "chart.line.uptrend.xyaxis")
+                }
+                .disabled(!appState.canOpenPerformanceMonitor(for: node))
+            }
+
             Divider()
 
             Button {

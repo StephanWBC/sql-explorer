@@ -548,17 +548,40 @@ class AppState: ObservableObject {
 
     // MARK: - Performance Monitor
 
-    /// Resolves the connected DB to an AzureDatabase (via discovered subscriptions) and stashes
-    /// it for the Performance window to pick up. Returns true if a match was found.
+    /// Resolves the connected DB to an AzureDatabase (active subscription first, then
+    /// the cross-subscription cache) and stashes it for the Performance window to pick
+    /// up. Returns true if a match was found — meaning the menu item is meaningful for
+    /// this database. Manual connections never match (no Azure metrics endpoint).
     @discardableResult
     func openPerformanceMonitor(for db: DatabaseObject) -> Bool {
-        guard let fqdn = db.serverFqdn,
-              let azureDb = authService.databases.first(where: {
-                  $0.databaseName == db.name && $0.serverFqdn == fqdn
-              })
-        else { return false }
+        guard let azureDb = resolveAzureDatabase(for: db) else { return false }
         performanceContext = azureDb
         return true
+    }
+
+    /// True when a database has an Azure metrics endpoint we can target. Use this to
+    /// gate the Performance menu item across all the screens (Object Explorer,
+    /// Groups, Favorites) so the item is enabled exactly when clicking it would work.
+    func canOpenPerformanceMonitor(for db: DatabaseObject) -> Bool {
+        resolveAzureDatabase(for: db) != nil
+    }
+
+    func canOpenPerformanceMonitor(databaseName: String, serverFqdn: String) -> Bool {
+        resolveAzureDatabase(databaseName: databaseName, serverFqdn: serverFqdn) != nil
+    }
+
+    private func resolveAzureDatabase(for db: DatabaseObject) -> AzureDatabase? {
+        guard let fqdn = db.serverFqdn else { return nil }
+        return resolveAzureDatabase(databaseName: db.name, serverFqdn: fqdn)
+    }
+
+    private func resolveAzureDatabase(databaseName: String, serverFqdn: String) -> AzureDatabase? {
+        if let local = authService.databases.first(where: {
+            $0.databaseName == databaseName && $0.serverFqdn == serverFqdn
+        }) { return local }
+        return authService.crossSubDatabases.first(where: {
+            $0.databaseName == databaseName && $0.serverFqdn == serverFqdn
+        })
     }
 
     // MARK: - Database Diagram (ERD)

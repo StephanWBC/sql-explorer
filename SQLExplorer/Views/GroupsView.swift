@@ -297,6 +297,18 @@ struct GroupsView: View {
                 }
             }
 
+            if let node = appState.findConnectedNode(
+                databaseName: member.databaseName, serverFqdn: member.serverFqdn) {
+                Button {
+                    if appState.openPerformanceMonitor(for: node) {
+                        openWindow(id: "performance")
+                    }
+                } label: {
+                    Label("Performance", systemImage: "chart.line.uptrend.xyaxis")
+                }
+                .disabled(!appState.canOpenPerformanceMonitor(for: node))
+            }
+
             Divider()
 
             Button {

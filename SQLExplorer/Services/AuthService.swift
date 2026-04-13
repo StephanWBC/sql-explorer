@@ -22,6 +22,12 @@ class AuthService: ObservableObject {
     /// happened to be active at add-time.
     @Published var serverToSubscription: [String: AzureSubscription] = [:]
 
+    /// Every Azure SQL database the user can see across every subscription. Populated
+    /// alongside `serverToSubscription` so cross-sub features (e.g. Performance on a
+    /// member from a different subscription) can resolve the AzureDatabase + its
+    /// resourceGroup without forcing a subscription switch.
+    @Published var crossSubDatabases: [AzureDatabase] = []
+
     private var application: MSALPublicClientApplication?
     private var account: MSALAccount?
     private var armAccessToken: String?
@@ -150,6 +156,7 @@ class AuthService: ObservableObject {
         databases = []
         selectedSubscription = nil
         serverToSubscription = [:]
+        crossSubDatabases = []
         errorMessage = nil
     }
 
@@ -266,13 +273,16 @@ class AuthService: ObservableObject {
         }
     }
 
-    /// Walks every subscription the user has access to, lists its SQL servers, and
-    /// builds a `serverFqdn → AzureSubscription` lookup. Runs once after sign-in.
-    /// Failures on individual subscriptions are non-fatal — they just won't appear
-    /// in the map (and any saved members on those servers won't get badges).
+    /// Walks every subscription the user has access to, lists its SQL servers AND
+    /// each server's databases, and builds two lookups:
+    /// - `serverFqdn → AzureSubscription` (powers cross-sub pills)
+    /// - `crossSubDatabases: [AzureDatabase]` (powers cross-sub Performance + future
+    ///   features that need full ARM context like resourceGroup)
+    /// Runs once after sign-in. Failures on individual subscriptions are non-fatal.
     func discoverAllSubscriptionDatabases() async {
         guard let token = armAccessToken else { return }
         var map: [String: AzureSubscription] = [:]
+        var allDbs: [AzureDatabase] = []
 
         for sub in subscriptions {
             do {
@@ -284,9 +294,34 @@ class AuthService: ObservableObject {
                 guard let servers = json?["value"] as? [[String: Any]] else { continue }
 
                 for server in servers {
-                    if let props = server["properties"] as? [String: Any],
-                       let fqdn = props["fullyQualifiedDomainName"] as? String {
-                        map[fqdn] = sub
+                    guard let serverId = server["id"] as? String,
+                          let props = server["properties"] as? [String: Any],
+                          let fqdn = props["fullyQualifiedDomainName"] as? String else { continue }
+                    map[fqdn] = sub
+
+                    let parts = serverId.split(separator: "/")
+                    guard let rgIdx = parts.firstIndex(where: { $0.lowercased() == "resourcegroups" }),
+                          rgIdx + 1 < parts.count,
+                          let srvIdx = parts.firstIndex(where: { $0.lowercased() == "servers" }),
+                          srvIdx + 1 < parts.count else { continue }
+                    let rg = String(parts[rgIdx + 1])
+                    let srvName = String(parts[srvIdx + 1])
+
+                    do {
+                        var dbsReq = URLRequest(url: URL(string: "https://management.azure.com/subscriptions/\(sub.id)/resourceGroups/\(rg)/providers/Microsoft.Sql/servers/\(srvName)/databases?api-version=2021-11-01")!)
+                        dbsReq.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+                        dbsReq.timeoutInterval = 30
+                        let (dbsData, _) = try await URLSession.shared.data(for: dbsReq)
+                        let dbsJson = try JSONSerialization.jsonObject(with: dbsData) as? [String: Any]
+                        guard let dbs = dbsJson?["value"] as? [[String: Any]] else { continue }
+                        for db in dbs {
+                            guard let dbName = db["name"] as? String, dbName != "master" else { continue }
+                            allDbs.append(AzureDatabase(
+                                subscriptionId: sub.id, subscriptionName: sub.name,
+                                resourceGroup: rg, serverFqdn: fqdn, databaseName: dbName))
+                        }
+                    } catch {
+                        AppLogger.auth.warning("Cross-sub db enum failed for \(srvName) in \(sub.name): \(error.localizedDescription)")
                     }
                 }
             } catch {
@@ -295,6 +330,7 @@ class AuthService: ObservableObject {
         }
 
         serverToSubscription = map
+        crossSubDatabases = allDbs
     }
 
     func discoverDatabases(subscriptionId: String, subscriptionName: String) async {

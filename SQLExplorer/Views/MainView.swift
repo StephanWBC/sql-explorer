@@ -286,9 +286,7 @@ struct MainView: View {
             } label: {
                 Label("Performance", systemImage: "chart.line.uptrend.xyaxis")
             }
-            .disabled(db.serverFqdn == nil || !appState.authService.databases.contains(where: {
-                $0.databaseName == db.name && $0.serverFqdn == db.serverFqdn
-            }))
+            .disabled(!appState.canOpenPerformanceMonitor(for: db))
         }
         .onTapGesture(count: 2) {
             appState.newQueryForDatabase(db)

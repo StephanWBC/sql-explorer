@@ -119,6 +119,15 @@ struct ObjectExplorerRow: View {
                         Label("Database Diagram", systemImage: "rectangle.connected.to.line.below")
                     }
 
+                    Button {
+                        if appState.openPerformanceMonitor(for: node) {
+                            openWindow(id: "performance")
+                        }
+                    } label: {
+                        Label("Performance", systemImage: "chart.line.uptrend.xyaxis")
+                    }
+                    .disabled(!appState.canOpenPerformanceMonitor(for: node))
+
                     Divider()
 
                     Button {
