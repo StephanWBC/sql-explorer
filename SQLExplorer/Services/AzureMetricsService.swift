@@ -6,7 +6,7 @@ enum AzureMetricsService {
     /// Default metric set we display on the Performance window.
     /// Some metrics only exist on specific SKUs (e.g. `dtu_consumption_percent` only on DTU SKUs);
     /// the API silently omits those that don't apply, which we mirror — they just won't appear in the grid.
-    private static let defaultMetricNames: [String] = [
+    static let defaultMetricNames: [String] = [
         "cpu_percent",
         "dtu_consumption_percent",
         "physical_data_read_percent",
@@ -45,38 +45,70 @@ enum AzureMetricsService {
                "/databases/\(db.databaseName)"
     }
 
-    // MARK: - Permission Probe
+    // MARK: - Metric Definitions (also serves as permission probe)
 
-    /// Attempts a cheap `metricDefinitions` read to confirm the user has
-    /// `Microsoft.Insights/metrics/read` on the resource. 200 = allowed, 401/403 = denied.
-    /// Other failures (network, etc.) are treated as denied — the UI will surface the message.
-    static func probePermission(resourceId: String, token: String) async -> Bool {
+    /// Result of probing the resource: either we have permission and the set of metric names
+    /// that exist on this specific resource (varies by SKU — DTU vs vCore, etc.), or we don't.
+    enum MetricDefinitionsResult {
+        case allowed(availableMetricNames: Set<String>)
+        case denied
+        case error(String)
+    }
+
+    /// Calls the `metricDefinitions` endpoint. 200 = allowed (returns valid metric names for
+    /// this resource), 401/403 = denied. Other failures bubble up as `.error`.
+    static func fetchMetricDefinitions(resourceId: String, token: String) async -> MetricDefinitionsResult {
         let url = URL(string: "https://management.azure.com\(resourceId)/providers/Microsoft.Insights/metricDefinitions?api-version=2018-01-01")!
         var req = URLRequest(url: url)
         req.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.timeoutInterval = 30
 
         do {
-            let (_, response) = try await URLSession.shared.data(for: req)
-            guard let http = response as? HTTPURLResponse else { return false }
-            if http.statusCode == 200 { return true }
-            AppLogger.metrics.warning("Permission probe HTTP \(http.statusCode)")
-            return false
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let http = response as? HTTPURLResponse else {
+                return .error("Invalid response")
+            }
+            if http.statusCode == 401 || http.statusCode == 403 {
+                return .denied
+            }
+            guard http.statusCode == 200 else {
+                let body = String(data: data, encoding: .utf8) ?? ""
+                AppLogger.metrics.warning("metricDefinitions HTTP \(http.statusCode): \(body.prefix(200))")
+                return .error("HTTP \(http.statusCode)")
+            }
+            // Parse out metric names
+            var names = Set<String>()
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let values = json["value"] as? [[String: Any]] {
+                for def in values {
+                    if let nameDict = def["name"] as? [String: Any],
+                       let v = nameDict["value"] as? String {
+                        names.insert(v)
+                    }
+                }
+            }
+            return .allowed(availableMetricNames: names)
         } catch {
-            AppLogger.metrics.warning("Permission probe failed: \(error.localizedDescription)")
-            return false
+            AppLogger.metrics.warning("metricDefinitions failed: \(error.localizedDescription)")
+            return .error(error.localizedDescription)
         }
     }
 
     // MARK: - Metrics
 
+    /// `metricNames` should already be filtered to the set returned by `fetchMetricDefinitions`,
+    /// because Azure Monitor returns HTTP 400 for the entire request if any single metric
+    /// is invalid for the resource (it does NOT silently skip unknowns).
     static func fetchMetrics(resourceId: String,
                              token: String,
-                             timeRange: MetricTimeRange) async throws -> [MetricSeries] {
+                             timeRange: MetricTimeRange,
+                             metricNames: [String]) async throws -> [MetricSeries] {
+        guard !metricNames.isEmpty else { return [] }
+
         var components = URLComponents(string: "https://management.azure.com\(resourceId)/providers/Microsoft.Insights/metrics")!
         components.queryItems = [
             URLQueryItem(name: "api-version", value: "2018-01-01"),
-            URLQueryItem(name: "metricnames", value: defaultMetricNames.joined(separator: ",")),
+            URLQueryItem(name: "metricnames", value: metricNames.joined(separator: ",")),
             URLQueryItem(name: "aggregation", value: "Average,Maximum,Total"),
             URLQueryItem(name: "timespan",    value: timeRange.timespan),
             URLQueryItem(name: "interval",    value: timeRange.interval)

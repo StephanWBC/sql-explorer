@@ -10,8 +10,11 @@ final class PerformanceViewModel: ObservableObject {
     @Published var autoRefresh: Bool = false
 
     private var loadedDbId: AzureDatabase.ID?
+    /// Metric names valid for the loaded resource (intersection of our defaults and
+    /// what the resource's metricDefinitions endpoint returns). Cached after first load.
+    private var availableMetricNames: [String] = []
 
-    /// Full load: ARM token → permission probe → fetch metrics.
+    /// Full load: ARM token → fetch metric definitions (also serves as permission check) → fetch metrics.
     func load(db: AzureDatabase, authService: AuthService) async {
         isLoading = true
         permissionDenied = false
@@ -24,26 +27,41 @@ final class PerformanceViewModel: ObservableObject {
         }
 
         let resourceId = AzureMetricsService.resourceId(for: db)
-        let allowed = await AzureMetricsService.probePermission(resourceId: resourceId, token: token)
-        guard allowed else {
+        let result = await AzureMetricsService.fetchMetricDefinitions(resourceId: resourceId, token: token)
+        switch result {
+        case .denied:
             permissionDenied = true
+            return
+        case .error(let msg):
+            errorMessage = msg
+            return
+        case .allowed(let names):
+            // Keep only metrics that (a) we know how to display and (b) actually exist on this resource.
+            availableMetricNames = AzureMetricsService.defaultMetricNames.filter { names.contains($0) }
+        }
+
+        guard !availableMetricNames.isEmpty else {
+            errorMessage = "No supported metrics are available for this resource."
             return
         }
 
         do {
             series = try await AzureMetricsService.fetchMetrics(
-                resourceId: resourceId, token: token, timeRange: selectedTimeRange)
+                resourceId: resourceId,
+                token: token,
+                timeRange: selectedTimeRange,
+                metricNames: availableMetricNames)
             loadedDbId = db.id
         } catch {
             errorMessage = error.localizedDescription
         }
     }
 
-    /// Lighter refresh: skips the permission probe (only call after a successful `load`).
+    /// Lighter refresh: skips definitions/permission probe (only call after a successful `load`).
     func refresh(db: AzureDatabase, authService: AuthService) async {
         guard !isLoading else { return }
         // If db changed, do a full load instead.
-        if loadedDbId != db.id {
+        if loadedDbId != db.id || availableMetricNames.isEmpty {
             await load(db: db, authService: authService)
             return
         }
@@ -51,7 +69,10 @@ final class PerformanceViewModel: ObservableObject {
         let resourceId = AzureMetricsService.resourceId(for: db)
         do {
             let fresh = try await AzureMetricsService.fetchMetrics(
-                resourceId: resourceId, token: token, timeRange: selectedTimeRange)
+                resourceId: resourceId,
+                token: token,
+                timeRange: selectedTimeRange,
+                metricNames: availableMetricNames)
             series = fresh
             errorMessage = nil
         } catch {
