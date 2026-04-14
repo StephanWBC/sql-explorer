@@ -49,34 +49,78 @@ else
     echo "WARNING: MSAL.framework not found!"
 fi
 
-# Copy FreeTDS dylib and fix load path
-SYBDB_PATHS=("/opt/homebrew/lib/libsybdb.5.dylib" "/opt/homebrew/opt/freetds/lib/libsybdb.5.dylib")
-for SYBDB in "${SYBDB_PATHS[@]}"; do
-    if [ -f "$SYBDB" ]; then
-        cp "$SYBDB" "$APP_DIR/Contents/Frameworks/"
-        # Get the actual path the binary references
-        LINKED_PATH=$(otool -L "$APP_DIR/Contents/MacOS/SQLExplorer" | grep sybdb | awk '{print $1}')
-        if [ -n "$LINKED_PATH" ]; then
-            install_name_tool -change "$LINKED_PATH" @executable_path/../Frameworks/libsybdb.5.dylib "$APP_DIR/Contents/MacOS/SQLExplorer" 2>/dev/null || true
-        fi
-        codesign --force --sign - "$APP_DIR/Contents/Frameworks/libsybdb.5.dylib" 2>/dev/null || true
-        echo "Bundled FreeTDS from $SYBDB"
+# --- Helper: bundle a Homebrew dylib and rewrite its install name ---
+bundle_lib() {
+    local SRC="$1"
+    local LIBNAME
+    LIBNAME=$(basename "$SRC")
+    if [ ! -f "$APP_DIR/Contents/Frameworks/$LIBNAME" ]; then
+        cp "$SRC" "$APP_DIR/Contents/Frameworks/"
+        echo "  Bundled $LIBNAME"
+    fi
+}
+
+# --- Helper: rewrite all /opt/homebrew references inside a bundled dylib ---
+fix_homebrew_refs() {
+    local TARGET="$1"
+    otool -L "$TARGET" | awk '{print $1}' | grep '/opt/homebrew' | while read -r REF; do
+        local REFNAME
+        REFNAME=$(basename "$REF")
+        install_name_tool -change "$REF" "@executable_path/../Frameworks/$REFNAME" "$TARGET" 2>/dev/null || true
+    done
+}
+
+# 1) Copy OpenSSL dylibs (transitive dep of FreeTDS)
+for SSLDIR in "/opt/homebrew/opt/openssl@3/lib" "/opt/homebrew/lib"; do
+    if [ -f "$SSLDIR/libssl.3.dylib" ]; then
+        bundle_lib "$SSLDIR/libssl.3.dylib"
+        bundle_lib "$SSLDIR/libcrypto.3.dylib"
         break
     fi
 done
 
-# Copy ODBC dylibs for MS ODBC Driver support
+# 2) Copy FreeTDS dylib
+SYBDB_PATHS=("/opt/homebrew/lib/libsybdb.5.dylib" "/opt/homebrew/opt/freetds/lib/libsybdb.5.dylib")
+for SYBDB in "${SYBDB_PATHS[@]}"; do
+    if [ -f "$SYBDB" ]; then
+        bundle_lib "$SYBDB"
+        # Fix reference from main binary
+        LINKED_PATH=$(otool -L "$APP_DIR/Contents/MacOS/SQLExplorer" | grep sybdb | awk '{print $1}')
+        if [ -n "$LINKED_PATH" ]; then
+            install_name_tool -change "$LINKED_PATH" @executable_path/../Frameworks/libsybdb.5.dylib "$APP_DIR/Contents/MacOS/SQLExplorer" 2>/dev/null || true
+        fi
+        break
+    fi
+done
+
+# 3) Copy libltdl (transitive dep of ODBC)
+LTDL_PATHS=("/opt/homebrew/opt/libtool/lib/libltdl.7.dylib" "/opt/homebrew/lib/libltdl.7.dylib")
+for LTDL in "${LTDL_PATHS[@]}"; do
+    if [ -f "$LTDL" ]; then
+        bundle_lib "$LTDL"
+        break
+    fi
+done
+
+# 4) Copy ODBC dylibs
 for ODBCLIB in /opt/homebrew/lib/libodbc.2.dylib /opt/homebrew/lib/libodbcinst.2.dylib; do
     if [ -f "$ODBCLIB" ]; then
         LIBNAME=$(basename "$ODBCLIB")
-        cp "$ODBCLIB" "$APP_DIR/Contents/Frameworks/"
+        bundle_lib "$ODBCLIB"
+        # Fix reference from main binary
         LINKED=$(otool -L "$APP_DIR/Contents/MacOS/SQLExplorer" | grep "$LIBNAME" | awk '{print $1}' || true)
         if [ -n "$LINKED" ]; then
             install_name_tool -change "$LINKED" "@executable_path/../Frameworks/$LIBNAME" "$APP_DIR/Contents/MacOS/SQLExplorer" 2>/dev/null || true
         fi
     fi
 done
-echo "Bundled ODBC libraries."
+
+# 5) Rewrite all Homebrew references inside every bundled dylib and re-sign
+for BUNDLED in "$APP_DIR/Contents/Frameworks/"*.dylib; do
+    fix_homebrew_refs "$BUNDLED"
+    codesign --force --sign - "$BUNDLED" 2>/dev/null || true
+done
+echo "Bundled FreeTDS, OpenSSL, ODBC, and libltdl libraries."
 
 # Generate .icns icon from logo PNGs
 ICONSET="$APP_DIR/Contents/Resources/AppIcon.iconset"
