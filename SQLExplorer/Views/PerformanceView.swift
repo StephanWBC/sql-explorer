@@ -224,15 +224,22 @@ struct PerformanceView: View {
             )
         } else {
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 12) {
-                    ForEach(orderedSeries) { s in
-                        MetricChartView(
-                            series: s,
-                            isExpanded: false,
-                            onExpand: { expandedMetric = s.metricName },
-                            onPinToggle: { togglePin(s.metricName) },
-                            isPinned: pinned.contains(s.metricName)
-                        )
+                VStack(spacing: 14) {
+                    HealthOverviewCard(
+                        series: viewModel.series,
+                        timeRangeLabel: viewModel.selectedTimeRange.rawValue
+                    )
+
+                    LazyVGrid(columns: columns, spacing: 12) {
+                        ForEach(orderedSeries) { s in
+                            MetricChartView(
+                                series: s,
+                                isExpanded: false,
+                                onExpand: { expandedMetric = s.metricName },
+                                onPinToggle: { togglePin(s.metricName) },
+                                isPinned: pinned.contains(s.metricName)
+                            )
+                        }
                     }
                 }
                 .padding(14)

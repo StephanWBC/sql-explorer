@@ -18,6 +18,7 @@ struct MetricChartView: View {
     var isPinned: Bool = false
 
     @State private var hoverPoint: MetricDataPoint?
+    @State private var showInfo: Bool = false
 
     // MARK: - Formatting
 
@@ -125,6 +126,21 @@ struct MetricChartView: View {
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.primary)
 
+            if MetricCatalog.info(for: series.metricName) != nil {
+                Button {
+                    showInfo = true
+                } label: {
+                    Image(systemName: "info.circle")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("What is this metric?")
+                .popover(isPresented: $showInfo, arrowEdge: .top) {
+                    infoPopover
+                }
+            }
+
             if let trend {
                 HStack(spacing: 2) {
                     Image(systemName: trend.symbol)
@@ -222,6 +238,22 @@ struct MetricChartView: View {
                             startPoint: .top, endPoint: .bottom
                         )
                     )
+                }
+            }
+
+            // Warning / critical threshold lines — visual reference for "is this bad?".
+            // Only drawn for % gauges where 75 / 90 are meaningful on a 0–100 scale.
+            if series.isPercentage, series.kind == .gauge,
+               let info = MetricCatalog.info(for: series.metricName) {
+                if let warn = info.warnThreshold {
+                    RuleMark(y: .value("Warn", warn))
+                        .foregroundStyle(Color.orange.opacity(0.4))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
+                }
+                if let crit = info.critThreshold {
+                    RuleMark(y: .value("Critical", crit))
+                        .foregroundStyle(Color.red.opacity(0.4))
+                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 3]))
                 }
             }
 
@@ -336,6 +368,73 @@ struct MetricChartView: View {
             .filter { series.plotValue(for: $0) != nil }
             .min(by: { abs($0.timestamp.timeIntervalSince(date)) < abs($1.timestamp.timeIntervalSince(date)) })
         hoverPoint = nearest
+    }
+
+    // MARK: - Info popover
+
+    /// Plain-language explanation of the metric — reads the shared `MetricCatalog`
+    /// so both this popover and the health overview stay in sync.
+    @ViewBuilder
+    private var infoPopover: some View {
+        if let info = MetricCatalog.info(for: series.metricName) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle.fill")
+                        .foregroundStyle(.tint)
+                    Text(series.displayName)
+                        .font(.system(size: 13, weight: .semibold))
+                }
+
+                infoBlock(title: "What it measures", body: info.summary)
+                infoBlock(title: "How to read the chart", body: info.interpretation)
+                infoBlock(title: "When to worry", body: info.whenToWorry)
+
+                if let warn = info.warnThreshold, let crit = info.critThreshold {
+                    HStack(spacing: 8) {
+                        thresholdChip(color: .orange, label: "Warn", value: warn, isPercent: series.isPercentage)
+                        thresholdChip(color: .red, label: "Critical", value: crit, isPercent: series.isPercentage)
+                        Spacer()
+                    }
+                }
+
+                Text("Source: Azure Monitor → `\(series.metricName)`")
+                    .font(.system(size: 9).monospaced())
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(14)
+            .frame(width: 340)
+        }
+    }
+
+    private func infoBlock(title: String, body: String) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title.uppercased())
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(.tertiary)
+                .kerning(0.6)
+            Text(body)
+                .font(.system(size: 11))
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func thresholdChip(color: Color, label: String, value: Double, isPercent: Bool) -> some View {
+        let text = isPercent ? String(format: "%.0f%%", value) : String(format: "%.0f", value)
+        return HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text("\(label): \(text)")
+                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3)
+        .background(
+            Capsule().fill(color.opacity(0.08))
+        )
+        .overlay(
+            Capsule().stroke(color.opacity(0.3), lineWidth: 0.5)
+        )
     }
 
     // MARK: - CSV
