@@ -73,6 +73,9 @@ jobs:
 
             Native macOS SQL Server management app built with Swift + SwiftUI.
 
+            ### What changed
+            ${{ github.event.head_commit.message }}
+
             ### Download
             - **macOS**: `SQLExplorer-${{ needs.version.outputs.version }}-mac.dmg`
 
